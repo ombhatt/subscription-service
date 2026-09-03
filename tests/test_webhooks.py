@@ -204,7 +204,9 @@ async def test_a_failed_event_can_be_retried(client, session, stripe, monkeypatc
     assert row.status == "failed"
     await session.commit()
 
-    monkeypatch.setattr(stripe_client, "fetch_current_subscription", stripe.fetch_current_subscription)
+    monkeypatch.setattr(
+        stripe_client, "fetch_current_subscription", stripe.fetch_current_subscription
+    )
     retried = await post(client, event)
     assert retried.status_code == 200
     assert retried.json()["status"] == "ok"

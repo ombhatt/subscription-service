@@ -91,7 +91,11 @@ async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any
             subscription_tier = Tier(sub.tier)
 
     grant_tier = await _active_grant_tier(session, user_id)
-    effective = subscription_tier if grant_tier is None else higher_tier(subscription_tier, grant_tier)
+    effective = (
+        subscription_tier
+        if grant_tier is None
+        else higher_tier(subscription_tier, grant_tier)
+    )
 
     if grant_tier is not None and TIER_RANK[grant_tier] > TIER_RANK[subscription_tier]:
         source = "grant"

@@ -1,6 +1,12 @@
 # Subscription service
 
+[![CI](https://github.com/ombhatt/subscription-service/actions/workflows/ci.yml/badge.svg)](https://github.com/ombhatt/subscription-service/actions/workflows/ci.yml)
+
 Flat-price **Free / Plus / Pro** subscriptions on Stripe Billing, FastAPI and Postgres.
+
+Changes reach `main` through pull requests that CI has passed — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the loop, what the three CI jobs prove,
+and what CI still cannot tell you.
 
 The service is two systems wearing one name:
 

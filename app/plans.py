@@ -11,20 +11,20 @@ environment. If you find yourself editing a call site, the abstraction leaked.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from app.config import get_settings
 
 UNLIMITED = None  # a limit of None means "no cap"
 
 
-class Tier(str, Enum):
+class Tier(StrEnum):
     FREE = "free"
     PLUS = "plus"
     PRO = "pro"
 
 
-class BillingInterval(str, Enum):
+class BillingInterval(StrEnum):
     MONTHLY = "monthly"
     ANNUAL = "annual"
 
@@ -34,7 +34,7 @@ class BillingInterval(str, Enum):
 TIER_RANK: dict[Tier, int] = {Tier.FREE: 0, Tier.PLUS: 1, Tier.PRO: 2}
 
 
-class QuotaWindow(str, Enum):
+class QuotaWindow(StrEnum):
     """How a counter's window is chosen.
 
     DAILY resets at UTC midnight. BILLING_PERIOD resets on the subscriber's own

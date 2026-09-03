@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
@@ -31,7 +31,7 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-class SubscriptionStatus(str, Enum):
+class SubscriptionStatus(StrEnum):
     """Internal status. Deliberately *not* Stripe's vocabulary.
 
     Only TRIALING, ACTIVE and PAST_DUE grant paid entitlements -- PAST_DUE keeps

@@ -58,7 +58,8 @@ async def test_full_upgrade_flow(client, stripe):
     # 3. the webhook is what grants
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    assert (await webhook(client, "evt_up", "checkout.session.completed", customer)).status_code == 200
+    granted = await webhook(client, "evt_up", "checkout.session.completed", customer)
+    assert granted.status_code == 200
 
     ents = (await client.get("/v1/entitlements", headers=USER)).json()
     assert ents["tier"] == "pro"

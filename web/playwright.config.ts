@@ -23,7 +23,10 @@ export default defineConfig({
   // These tests mock /api/**, so only the Next server is needed -- no Postgres,
   // no Redis, no Stripe, no uvicorn. Reuses a dev server if one is already up.
   webServer: {
-    command: "npm run dev",
+    // CI has already run `next build`, so test the production bundle there --
+    // dev mode compiles on demand and is not what ships. Locally, reuse
+    // whatever dev server is already running.
+    command: process.env.CI ? "npm run start" : "npm run dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
