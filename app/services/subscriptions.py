@@ -204,6 +204,16 @@ def _apply_no_subscription(sub: Subscription) -> None:
 
 def _apply_remote(sub: Subscription, remote: dict) -> None:
     status = STATUS_MAP.get(remote.get("status", ""), SubscriptionStatus.FREE)
+
+    if status is SubscriptionStatus.FREE:
+        # Terminal: cancelled, or an abandoned checkout that expired. Stripe
+        # keeps returning the dead object, so without this the row would hold a
+        # subscription id that can never be charged again -- and local state
+        # would differ depending on whether the provider still lists it. The
+        # transition is preserved in the audit trail either way.
+        _apply_no_subscription(sub)
+        return
+
     price = stripe_client.subscription_price(remote)
     tier, interval = resolve_tier(price)
 

@@ -38,7 +38,7 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Lint
-        run: ruff check app tests scripts
+        run: ruff check app tests scripts integration
 
       - name: Tests
         run: pytest -q

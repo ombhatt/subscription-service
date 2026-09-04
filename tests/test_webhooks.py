@@ -114,6 +114,30 @@ async def test_cancellation_drops_to_free(client, session, stripe):
     assert sub.stripe_subscription_id is None
 
 
+async def test_a_cancelled_subscription_still_listed_is_treated_as_gone(client, session, stripe):
+    """Stripe keeps returning a cancelled subscription rather than dropping it.
+
+    Found by the test-clock suite: this path and the "no subscription at all"
+    path must produce identical local state, or whether a user looks subscribed
+    depends on how long the provider keeps the corpse around.
+    """
+    customer = await seed_customer(session, stripe)
+    stripe.set_subscription(customer, status="active", price_id="price_pro_m")
+    created = webhook_event("evt_h1", "customer.subscription.created", {"customer": customer})
+    await post(client, created)
+
+    stripe.set_subscription(customer, status="canceled", price_id="price_pro_m")
+    deleted = webhook_event("evt_h2", "customer.subscription.deleted", {"customer": customer})
+    await post(client, deleted)
+
+    sub = await read_sub(session)
+    assert sub.tier == "free"
+    assert sub.status == "free"
+    assert sub.stripe_subscription_id is None, "a dead subscription id must not linger"
+    assert sub.current_period_end is None
+    assert sub.cancel_at_period_end is False
+
+
 async def test_failed_payment_starts_the_grace_window_once(client, session, stripe):
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="past_due", price_id="price_plus_m")
