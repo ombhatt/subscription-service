@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
+from app.auth import require_admin
 from app.db import get_session
 from app.models import ProcessedEvent
 from app.services.subscriptions import mark_disputed, sync_subscription_from_stripe
@@ -165,11 +166,18 @@ async def _handle(session: AsyncSession, event: dict) -> bool:
     return False
 
 
-@router.get("/recent", tags=["ops"])
+@router.get("/recent", tags=["ops"], dependencies=[Depends(require_admin)])
 async def recent_events(
     limit: int = 50, session: AsyncSession = Depends(get_session)
 ) -> list[dict]:
-    """Webhook health at a glance: what arrived, what failed, how far behind."""
+    """Webhook health at a glance: what arrived, what failed, how far behind.
+
+    Guarded explicitly, because this router is otherwise unauthenticated by
+    necessity -- Stripe cannot send an admin key, so `/stripe` is protected by
+    signature verification instead. Anything else added here needs its own
+    dependency, and this one shipped without it: the rows include `error`, which
+    holds a truncated traceback, so it was serving stack traces to the internet.
+    """
     result = await session.execute(
         select(ProcessedEvent).order_by(ProcessedEvent.received_at.desc()).limit(limit)
     )
