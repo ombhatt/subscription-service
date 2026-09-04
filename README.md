@@ -347,12 +347,33 @@ will never age our grace window.
 
 ## Operations
 
-Two cron entries:
+Deployment — images, the process model, the deploy sequence and how to schedule
+the jobs — is in **[DEPLOY.md](DEPLOY.md)**. The short version: everything runs
+from one image with a different argument.
+
+```bash
+docker compose --profile full up --build   # the whole stack, the way it deploys
+```
+
+Two cron entries, both the same image:
 
 ```bash
 python -m app.jobs.reconcile      # nightly; alert on mismatched > 0
 python -m app.jobs.expire_grace   # nightly; closes dunning grace windows
 ```
+
+### Probes
+
+| probe | checks | use for |
+|---|---|---|
+| `GET /healthz` | nothing, on purpose | liveness / container restart |
+| `GET /readyz` | Postgres, Redis | load balancer rotation |
+
+A liveness probe that checks the database restarts every instance when the
+database blinks, so `/healthz` touches nothing. `/readyz` returns 503 when
+Postgres is unreachable but **200 `"degraded"` when only Redis is** — the read
+path falls back to the database, and Redis is shared, so failing readiness on it
+would empty the load balancer and turn a cache outage into a total one.
 
 Reconciliation exists because you *will* miss webhooks — an outage, a bad
 deploy, a 500 inside a retry window. The only question is whether you find out
@@ -407,6 +428,9 @@ carries `mismatched` as a field.
 - [x] **Postgres** — the Supabase project's database, via the session pooler
 - [x] **Test Clocks** — renewal, dunning, cancel-at-boundary, trial conversion
       and mid-cycle upgrade, against real Stripe objects
+- [x] **Deployable** — one image for the API, the migrations and both jobs;
+      dependencies pinned in `requirements.lock`; CI builds both images and
+      smoke-tests them. See [DEPLOY.md](DEPLOY.md).
 - [ ] **Re-enable email confirmation** in Supabase if you disabled it. Without
       it anyone can register an address they do not own, and that address ends
       up on the Stripe customer and every receipt.
@@ -415,6 +439,9 @@ carries `mismatched` as a field.
 - [ ] **Change `ADMIN_API_KEY`**, and put the admin router behind your internal
       network or SSO rather than a shared secret. The code refuses to
       authenticate with the default value when `ENVIRONMENT=production`.
+- [ ] **Accessibility.** The billing pages have no ARIA anywhere: status
+      banners are not announced, and the quota meters convey state by colour
+      and bar width alone. This is the largest remaining gap in the frontend.
 - [ ] **Rate limiting.** There is none. General throttling belongs at the edge;
       the three worth doing in-app are admin auth attempts, checkout creation
       per user, and any public promo-code lookup added later.

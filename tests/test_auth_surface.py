@@ -22,6 +22,7 @@ ADMIN = {"X-Admin-Key": "test-admin-key"}
 # Every path that may be reached without credentials, and why.
 DELIBERATELY_PUBLIC = {
     ("GET", "/healthz"),  # liveness probe
+    ("GET", "/readyz"),  # readiness probe; load balancers cannot send a key
     ("GET", "/v1/billing/plans"),  # the pricing page, before anyone signs up
     ("GET", "/v1/billing/health"),  # config check for deploy pipelines
     ("POST", "/v1/webhooks/stripe"),  # Stripe cannot authenticate; signed instead
