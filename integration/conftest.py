@@ -33,6 +33,11 @@ from app.config import get_settings
 from app.models import Base
 from app.stripe_client import _as_dict
 
+# Prefixed onto every clock this suite creates. CI sets it so the cleanup step
+# can delete only what CI made -- the nightly run shares a sandbox with whatever
+# simulations you have open in the Dashboard, and must not touch those.
+CLOCK_PREFIX = os.environ.get("TEST_CLOCK_PREFIX", "")
+
 # How long to wait for an advance to finish before giving up.
 ADVANCE_TIMEOUT_S = 90
 # Stripe holds a renewal invoice in `draft` for about an hour of simulated time
@@ -83,7 +88,9 @@ class Clock:
     def __init__(self, name: str) -> None:
         self.started_at = int(time.time())
         raw = _as_dict(
-            stripe.test_helpers.TestClock.create(frozen_time=self.started_at, name=name)
+            stripe.test_helpers.TestClock.create(
+                frozen_time=self.started_at, name=f"{CLOCK_PREFIX}{name}"
+            )
         )
         self.id = raw["id"]
 

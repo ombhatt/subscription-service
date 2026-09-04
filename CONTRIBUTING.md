@@ -78,10 +78,24 @@ open the first PR before configuring this.
 ## Things CI cannot tell you
 
 - **Stripe Test Clocks.** `make testclock` runs the lifecycle against real
-  sandbox objects, and CI cannot: it needs a key and network. Run it yourself
-  before merging anything that touches `services/subscriptions.py`,
-  `stripe_client.py` or a status mapping. It is the only thing that checks our
-  reading of Stripe rather than our logic, and it takes about two minutes.
+  sandbox objects. Run it yourself before merging anything that touches
+  `services/subscriptions.py`, `stripe_client.py` or a status mapping — it is
+  the only thing that checks our reading of Stripe rather than our logic, and it
+  takes about two minutes.
+
+  It also runs nightly at 07:00 UTC via
+  [`nightly.yml`](.github/workflows/nightly.yml), which is *not* one of the PR
+  checks. That schedule exists because the drift it catches — Stripe moving a
+  field, changing a status transition — arrives on its own rather than with your
+  commits. A red nightly usually means the provider changed, not that you did.
+  You can also trigger it by hand from the Actions tab.
+
+  Two things about that workflow worth knowing. It runs against the same sandbox
+  you develop in, so every clock it creates is named `ci-*` and the cleanup step
+  only ever deletes those, and only once they are an hour old — a simulation you
+  have open in the Dashboard is never touched. And scheduled workflows only run
+  from the default branch, and GitHub disables them after 60 days without repo
+  activity, so a silent nightly is worth checking on rather than trusting.
 - **Price changes.** Editing an amount in `scripts/seed_stripe.py` and re-running
   it creates a *new* Stripe price. Existing subscribers stay on the old one by
   design — verify that grandfathering held rather than assuming it.
