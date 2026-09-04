@@ -26,9 +26,9 @@ Three jobs, on every PR and every push to `main`:
 
 | job | what it proves |
 |---|---|
-| `service (py3.11, py3.12)` | `ruff` is clean and all 44 tests pass, on the declared floor and the next version |
-| `migrations on postgres` | the schema applies to a real Postgres 16, rolls back, and applies again |
-| `web` | the production bundle builds, types check, and 24 Playwright specs pass against that bundle |
+| `service (py3.11, py3.12)` | `ruff` is clean and all 91 tests pass, on the declared floor and the next version |
+| `migrations on postgres` | the schema applies to a real Postgres 17, rolls back, and applies again |
+| `web` | the production bundle builds, types check, and 30 Playwright specs pass against that bundle |
 
 The migrations job earns its place: the test suite runs on SQLite for speed, so
 this is the only place the schema meets the engine it will actually run on. It
@@ -55,25 +55,22 @@ delete the branch after.
 
 ## Branch protection
 
-CI reporting a failure means nothing if a PR can be merged anyway. Set this up in
-**Settings → Branches → Add branch ruleset** (or *Branch protection rules*):
+`main` is protected, and this is enforced rather than advisory: a direct push is
+rejected with `GH013`, and a merge needs a pull request with all four checks
+green. The ruleset requires a pull request (0 approvals, so you can merge your
+own), those four status checks, branches up to date before merging, and blocks
+force pushes and deletion.
 
-- Target: `main`
-- **Require a pull request before merging** — with approvals set to 0 if you are
-  working solo, so you can still merge your own PRs
-- **Require status checks to pass**, selecting `service (py3.11)`,
-  `service (py3.12)`, `migrations on postgres` and `web`
-- **Require branches to be up to date before merging**
-- **Block force pushes**
+Two things that were not obvious when setting it up, in case it ever needs
+rebuilding. A ruleset can be **Active** and still enforce nothing if its *target
+branches* list is empty — check `gh api repos/:owner/:repo/rules/branches/main`
+returns rules rather than `[]`, because the settings page looks identical either
+way. And status checks only appear in the selector once they have run at least
+once, so open a PR before configuring it.
 
-The status checks only appear in that list after they have run at least once, so
-open the first PR before configuring this.
-
-> On a **private** repo, branch protection and rulesets require GitHub Pro or
-> Team. On a free plan the rules cannot be enforced — CI still runs and still
-> reports on every PR, you just have nothing stopping a merge over a red check.
-> Making the repo public also unlocks it, at the cost of publishing the pricing
-> and dunning logic.
+Enforcement on a **private** repo needs a GitHub Team or Enterprise
+*organization* — a personal Pro upgrade does not unlock it. This repo is public,
+which is the other way to get it.
 
 ## Things CI cannot tell you
 
