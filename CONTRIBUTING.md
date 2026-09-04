@@ -77,9 +77,11 @@ open the first PR before configuring this.
 
 ## Things CI cannot tell you
 
-- **Stripe Test Clocks.** The suite fakes Stripe. Renewal, a failed payment
-  through the full dunning schedule, and a downgrade at the period boundary have
-  to be exercised against a real test-mode account.
+- **Stripe Test Clocks.** `make testclock` runs the lifecycle against real
+  sandbox objects, and CI cannot: it needs a key and network. Run it yourself
+  before merging anything that touches `services/subscriptions.py`,
+  `stripe_client.py` or a status mapping. It is the only thing that checks our
+  reading of Stripe rather than our logic, and it takes about two minutes.
 - **Price changes.** Editing an amount in `scripts/seed_stripe.py` and re-running
   it creates a *new* Stripe price. Existing subscribers stay on the old one by
   design — verify that grandfathering held rather than assuming it.

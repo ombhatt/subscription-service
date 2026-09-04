@@ -89,8 +89,9 @@ harmless, which is the whole point of granting on the webhook.
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # the service
-cd web && npx playwright test    # the frontend
+.venv/bin/pytest -q              # the service, against a Stripe fake
+cd web && npx playwright test    # the frontend, against a mocked API
+make testclock                   # the service, against real Stripe sandbox objects
 ```
 
 The **service** suite runs against SQLite with a Stripe fake — no network, no
@@ -120,6 +121,25 @@ Two of its rules are there because of bugs that got through:
 Dates are asserted against a pinned `timezoneId: "UTC"` and `locale: "en-US"`,
 since the app formats with `toLocaleDateString` and would otherwise render
 "Sep 10 UTC" as "Sep 9" for anyone west of Greenwich.
+
+The **test-clock** suite ([`integration/`](integration)) is the one that talks to
+Stripe for real. It creates a simulation per test, moves time forward, and
+asserts what `sync_subscription_from_stripe` writes — so it catches the class of
+bug the fake structurally cannot: where our *reading* of Stripe is wrong rather
+than our logic. It found one immediately. Stripe keeps returning a cancelled
+subscription instead of dropping it, so we took the "apply this subscription"
+path and kept a dead `stripe_subscription_id`, while the fake — which deletes
+the object — took the "no subscription" path and cleared it. Both now converge.
+
+Two things it cannot do, by construction:
+
+- **It never runs in CI.** It needs a sandbox key and network. `pytest` skips it
+  by default via `testpaths`; run it before anything touching the write path.
+- **A test clock moves Stripe's time, not ours.** `past_due_since` is stamped
+  with real wall-clock time, so advancing a simulation will never age our grace
+  window. Anything time-based that *we* own has to be tested on our own terms —
+  `test_the_grace_window_closes_on_our_clock_not_stripes` does exactly that, and
+  exists to stop someone assuming otherwise.
 
 ---
 
@@ -289,10 +309,9 @@ payment failure rate, reconciliation drift.
       tax at all. You are the merchant of record on Stripe Billing: VAT/sales
       tax registration is yours. (Paddle is where you go to make that
       someone else's problem, at roughly 5%.)
-- [ ] **Run the Test Clock suite** in your Stripe test account: renewal,
-      upgrade, downgrade at the boundary, failed payment through full dunning,
-      cancel and reactivate. The pytest suite covers our logic; test clocks
-      cover the integration.
+- [x] **Test Clocks** — [`integration/`](integration) drives real Stripe objects
+      through renewal, a failed renewal into the grace window, cancel-at-boundary,
+      trial conversion and a mid-cycle upgrade. Run with `make testclock`.
 - [ ] **Pin `STRIPE_API_VERSION`** to the version you tested against. Note that
       recent versions moved the billing period from the subscription onto its
       items — `stripe_client.subscription_period()` reads whichever is present,

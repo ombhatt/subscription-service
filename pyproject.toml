@@ -27,7 +27,12 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Only `tests` by default: `integration` needs a Stripe sandbox key and network,
+# so it is opt-in via an explicit path (see integration/conftest.py).
 testpaths = ["tests"]
+# Put the repo root on sys.path so both suites can import `app` regardless of
+# whether their directory happens to be a package.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

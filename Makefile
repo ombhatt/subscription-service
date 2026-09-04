@@ -3,7 +3,7 @@
 #   make install PYTHON=/opt/homebrew/bin/python3.12
 PYTHON ?= python3.11
 
-.PHONY: up down services services-down install migrate seed run test lint
+.PHONY: up down services services-down install migrate seed run test testclock lint
 
 up:            ## start postgres + redis in docker
 	docker compose up -d
@@ -34,8 +34,11 @@ seed:          ## create products/prices in Stripe, prints price ids for .env
 run:
 	.venv/bin/uvicorn app.main:app --reload --port 8000
 
+testclock:      ## lifecycle against real Stripe sandbox objects (needs .env key + network)
+	.venv/bin/pytest integration/ -v
+
 test:
 	.venv/bin/pytest -q
 
 lint:
-	.venv/bin/ruff check app tests scripts
+	.venv/bin/ruff check app tests scripts integration
