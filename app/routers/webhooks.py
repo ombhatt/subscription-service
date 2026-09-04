@@ -24,6 +24,16 @@ from app import stripe_client
 from app.auth import require_admin
 from app.db import get_session
 from app.models import ProcessedEvent
+from app.observability import (
+    Timer,
+    payment_failures,
+    webhook_duration,
+    webhook_events,
+    webhook_lag,
+)
+from app.observability import (
+    event as log_event,
+)
 from app.services.subscriptions import mark_disputed, sync_subscription_from_stripe
 
 log = logging.getLogger(__name__)
@@ -70,20 +80,45 @@ async def stripe_webhook(
     event_type = event["type"]
 
     if not await _claim(session, event_id, event_type):
+        webhook_events.labels(event_type=event_type, outcome="duplicate").inc()
         return {"status": "duplicate", "event_id": event_id}
 
+    timer = Timer()
     try:
-        handled = await _handle(session, event)
-        await _mark(session, event_id, "processed")
-        await session.commit()
+        with timer:
+            handled = await _handle(session, event)
+            await _mark(session, event_id, "processed")
+            await session.commit()
     except Exception:
         await session.rollback()
         await _mark(session, event_id, "failed", error=_short_error())
         await session.commit()
+        webhook_events.labels(event_type=event_type, outcome="failed").inc()
+        log_event(log, "webhook.failed", event_id=event_id, event_type=event_type)
         log.exception("webhook %s (%s) failed", event_id, event_type)
         # 500 so Stripe retries on its own backoff schedule.
         raise HTTPException(status_code=500, detail="webhook handling failed") from None
 
+    outcome = "processed" if handled else "ignored"
+    webhook_events.labels(event_type=event_type, outcome=outcome).inc()
+    webhook_duration.observe(timer.elapsed)
+    if event_type == "invoice.payment_failed":
+        payment_failures.inc()
+
+    # How far behind Stripe we are, which is the number that shows a backlog
+    # forming -- not how long we took, which stays flat while a queue grows.
+    created = event.get("created")
+    if created:
+        webhook_lag.observe(max(0.0, datetime.now(UTC).timestamp() - float(created)))
+
+    log_event(
+        log,
+        "webhook.handled",
+        event_id=event_id,
+        event_type=event_type,
+        outcome=outcome,
+        duration_ms=round(timer.elapsed * 1000, 1),
+    )
     return {"status": "ok" if handled else "ignored", "event_id": event_id}
 
 

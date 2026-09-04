@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import get_cache
 from app.errors import QuotaExceeded
 from app.models import UsageCounter
+from app.observability import quota_rejections
 from app.plans import CATALOG, TIER_RANK, QuotaWindow, Tier
 from app.services.entitlements import quota_limit
 
@@ -130,6 +131,7 @@ async def consume(
 
     if limit is not None and used > limit:
         current = Tier(entitlements["tier"])
+        quota_rejections.labels(quota=key, tier=current.value).inc()
         raise QuotaExceeded(
             key=key,
             limit=limit,

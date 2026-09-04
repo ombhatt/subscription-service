@@ -21,6 +21,8 @@ from app import stripe_client
 from app.config import get_settings
 from app.errors import BillingError
 from app.models import PAID_STATUSES, Subscription, SubscriptionStatus
+from app.observability import event as log_event
+from app.observability import subscription_transitions
 from app.plans import BillingInterval, Tier, price_catalog, price_id_for
 from app.services import audit
 from app.services.entitlements import invalidate_entitlements
@@ -247,6 +249,18 @@ async def sync_subscription_from_stripe(
 
     after = audit.snapshot(sub)
     changed = before != after
+    if changed:
+        subscription_transitions.labels(from_tier=before[0], to_tier=after[0]).inc()
+        log_event(
+            log,
+            "subscription.changed",
+            user_id=sub.user_id,
+            reason=reason,
+            from_tier=before[0],
+            to_tier=after[0],
+            from_status=before[1],
+            to_status=after[1],
+        )
     if changed or reason != "stripe.sync":
         await audit.record(
             session,

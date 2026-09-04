@@ -4,16 +4,27 @@ import logging
 from contextlib import asynccontextmanager
 
 import stripe
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from app.auth import require_admin
 from app.cache import close_cache
 from app.config import get_settings
 from app.db import dispose_engine
 from app.errors import FeatureNotEntitled, QuotaExceeded
+from app.observability import (
+    REGISTRY,
+    configure_logging,
+    new_request_id,
+    request_id_var,
+)
 from app.routers import admin, billing, chat_demo, entitlements, webhooks
 
-logging.basicConfig(level=logging.INFO)
+configure_logging(
+    json_logs=get_settings().log_json,
+    level=getattr(logging, get_settings().log_level.upper(), logging.INFO),
+)
 log = logging.getLogger(__name__)
 
 
@@ -86,6 +97,39 @@ async def stripe_error_handler(request: Request, exc: stripe.StripeError) -> JSO
             "request_id": request_id,
         },
     )
+
+
+@app.middleware("http")
+async def correlate_requests(request: Request, call_next):
+    """Give every request an id, and put it on every log line it produces.
+
+    Accepts an inbound `X-Request-ID` so a trace started at a load balancer or
+    another service carries through, and always echoes it back so a customer
+    reporting a problem can quote something you can search for.
+    """
+    incoming = request.headers.get("x-request-id")
+    request_id = incoming if incoming and len(incoming) <= 128 else new_request_id()
+    token = request_id_var.set(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.get("/metrics", tags=["ops"], dependencies=[Depends(require_admin)])
+async def metrics() -> Response:
+    """Prometheus exposition.
+
+    Behind the admin key rather than open: it is a precise description of your
+    traffic and failure rates. Most scrapers can send a header.
+
+    Per-process and in memory, so under several workers a scrape sees one of
+    them. `prometheus_client`'s multiprocess mode is the answer when that
+    matters; until then, one worker keeps these honest.
+    """
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 app.include_router(billing.router)
