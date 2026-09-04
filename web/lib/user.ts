@@ -1,88 +1,93 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import type { User } from "@supabase/supabase-js";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+
+import { supabase } from "./supabase";
 
 /**
- * The development stand-in for a session.
+ * The signed-in user, kept in step with Supabase's auth state.
  *
- * A real app reads this from an auth provider; here it is a name in
- * localStorage so you can switch between customers and watch their
- * entitlements differ. Everything downstream treats it as an opaque user id,
- * which is what it will be once auth is real.
- *
- * This is a *shared* store rather than per-component state: with useState in
- * each caller, switching user in the nav re-rendered only the nav, and every
- * page kept querying the previous user.
+ * This replaced a `localStorage` name that stood in for a session. The shape it
+ * exposes is deliberately the same — an id, and a `ready` flag — because
+ * everything downstream only ever treated it as an opaque user id, which is
+ * exactly what it still is. That id is now the Supabase user's UUID, and it is
+ * what the subscriptions table keys on.
  */
 
-const STORAGE_KEY = "demo-user-id";
-const DEFAULT_USER = "alice";
-
-let current: string | null = null;
-const listeners = new Set<() => void>();
-
-function readStored(): string {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) || DEFAULT_USER;
-  } catch {
-    // Private browsing, or storage disabled.
-    return DEFAULT_USER;
-  }
+export interface SessionState {
+  user: User | null;
+  userId: string | null;
+  email: string | null;
+  ready: boolean;
+  signOut: () => Promise<void>;
 }
 
-function emit() {
-  for (const listener of listeners) listener();
-}
-
-function subscribe(onChange: () => void) {
-  listeners.add(onChange);
-
-  // Another tab switched user; keep this one in step.
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY) {
-      current = readStored();
-      emit();
-    }
-  };
-  window.addEventListener("storage", onStorage);
-
-  return () => {
-    listeners.delete(onChange);
-    window.removeEventListener("storage", onStorage);
-  };
-}
-
-function getSnapshot(): string {
-  if (current === null) current = readStored();
-  return current;
-}
-
-/** During SSR and hydration there is no localStorage; `ready` gates on this. */
-function getServerSnapshot(): string {
-  return DEFAULT_USER;
-}
-
-export function setUser(next: string) {
-  const trimmed = next.trim();
-  if (!trimmed || trimmed === current) return;
-  current = trimmed;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, trimmed);
-  } catch {
-    // Not fatal -- the switch just will not survive a reload.
-  }
-  emit();
-}
-
-export function useUser() {
-  const userId = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-
-  // False until mounted, so pages do not fetch for the server's default user
-  // and then immediately refetch for the real one.
+export function useUser(): SessionState {
+  const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
-  useEffect(() => setReady(true), []);
 
-  const changeUser = useCallback((next: string) => setUser(next), []);
+  useEffect(() => {
+    let active = true;
 
-  return { userId, changeUser, ready };
+    supabase()
+      .auth.getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        setUser(data.session?.user ?? null);
+        setReady(true);
+      })
+      .catch(() => {
+        if (active) setReady(true);
+      });
+
+    // Fires on sign-in, sign-out, and every silent token refresh, so a session
+    // that expires in another tab does not leave this one looking signed in.
+    const { data: listener } = supabase().auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+      setReady(true);
+    });
+
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await supabase().auth.signOut();
+  }, []);
+
+  return {
+    user,
+    userId: user?.id ?? null,
+    email: user?.email ?? null,
+    ready,
+    signOut,
+  };
+}
+
+/**
+ * Send signed-out visitors to the sign-in page.
+ *
+ * Deliberately client-side rather than Next middleware. Middleware would have
+ * to call Supabase's `getUser()` on every navigation -- a network round trip
+ * per page load -- and it was never the security boundary anyway: the API
+ * verifies every token itself, so someone who skipped this would reach a page
+ * whose every request 401s. This buys the redirect without the latency.
+ */
+export function useRequireSession(): SessionState {
+  const state = useUser();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (state.ready && !state.userId) {
+      router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    }
+  }, [state.ready, state.userId, router, pathname]);
+
+  return state;
 }

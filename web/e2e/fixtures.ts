@@ -169,8 +169,14 @@ export async function mockApi(page: Page, api: FakeApi) {
   });
 
   await page.route("**/api/v1/entitlements", async (route) => {
-    const userId = route.request().headers()["x-user-id"] ?? "unknown";
-    await route.fulfill({ json: api.entitlements(userId) });
+    // The real API derives the user from the bearer token; the fake only needs
+    // to notice that one was sent.
+    const authorization = route.request().headers()["authorization"] ?? "";
+    if (!authorization.toLowerCase().startsWith("bearer ")) {
+      await route.fulfill({ status: 401, json: { detail: "missing bearer token" } });
+      return;
+    }
+    await route.fulfill({ json: api.entitlements(TEST_USER_ID) });
   });
 
   await page.route("**/api/v1/billing/checkout", async (route) => {
@@ -243,11 +249,73 @@ export async function mockApi(page: Page, api: FakeApi) {
   });
 }
 
-/** Sets the demo user before any script runs, so the first render already has it. */
-export async function signInAs(page: Page, userId: string) {
-  await page.addInitScript((id) => {
-    window.localStorage.setItem("demo-user-id", id);
-  }, userId);
+export const TEST_USER_ID = "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80";
+export const TEST_EMAIL = "alice@example.test";
+
+function b64url(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+/**
+ * A JWT-shaped access token. The signature is meaningless -- nothing in the
+ * browser verifies it, and the API it would be sent to is mocked. The backend's
+ * own suite covers real signature verification against a generated keypair.
+ */
+export function fakeAccessToken(userId = TEST_USER_ID, email = TEST_EMAIL): string {
+  const now = Math.floor(Date.now() / 1000);
+  return [
+    b64url({ alg: "RS256", typ: "JWT", kid: "test" }),
+    b64url({
+      sub: userId,
+      email,
+      aud: "authenticated",
+      role: "authenticated",
+      iat: now,
+      exp: now + 3600,
+    }),
+    "not-a-real-signature",
+  ].join(".");
+}
+
+/**
+ * Sign in by driving the actual login form, with Supabase's endpoints mocked.
+ *
+ * Seeding a session cookie directly would be faster but couples the tests to
+ * whatever storage format @supabase/ssr uses this week. Letting the real client
+ * persist its own session survives that, and exercises the login page as a
+ * side effect.
+ */
+export async function signIn(
+  page: Page,
+  { userId = TEST_USER_ID, email = TEST_EMAIL } = {},
+) {
+  const user = {
+    id: userId,
+    aud: "authenticated",
+    role: "authenticated",
+    email,
+    app_metadata: {},
+    user_metadata: {},
+    created_at: new Date().toISOString(),
+  };
+  const session = {
+    access_token: fakeAccessToken(userId, email),
+    token_type: "bearer",
+    expires_in: 3600,
+    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    refresh_token: "fake-refresh-token",
+    user,
+  };
+
+  await page.route("**/auth/v1/token**", (route) => route.fulfill({ json: session }));
+  await page.route("**/auth/v1/user**", (route) => route.fulfill({ json: user }));
+  await page.route("**/auth/v1/logout**", (route) => route.fulfill({ status: 204, body: "" }));
+
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("a-password-long-enough");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 }
 
 export const test = base.extend<{ api: FakeApi }>({
@@ -260,7 +328,20 @@ export const test = base.extend<{ api: FakeApi }>({
     async ({ page }, use) => {
       const api = new FakeApi();
       await mockApi(page, api);
+
+      // An uncaught exception in the app otherwise surfaces as "element not
+      // found" several assertions later, which is a poor way to discover that
+      // a build-time environment variable was missing and every page crashed.
+      const crashes: string[] = [];
+      page.on("pageerror", (error) => crashes.push(error.message));
+
       await use(api);
+
+      if (crashes.length > 0) {
+        throw new Error(
+          `The page threw an uncaught exception:\n  ${crashes.join("\n  ")}`,
+        );
+      }
     },
     { auto: true },
   ],

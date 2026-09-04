@@ -33,11 +33,13 @@ os.environ.update(
     }
 )
 
+from fastapi import Header, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app import stripe_client
+from app.auth import CurrentUser, get_current_user
 from app.cache import InMemoryBackend, set_cache
 from app.db import get_session
 from app.main import app
@@ -79,6 +81,19 @@ async def session(sessionmaker_):
         yield s
 
 
+async def _current_user_for_tests(x_user_id: str | None = Header(default=None)) -> CurrentUser:
+    """Who is calling, for tests only.
+
+    The real dependency verifies a Supabase JWT and has no header-trusting
+    branch -- a development bypass in production code is exactly the thing that
+    survives to production. Overriding it here lets every test keep saying who
+    it is with a header, without that path existing in the app.
+    """
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="missing X-User-Id (test override)")
+    return CurrentUser(id=x_user_id, email=f"{x_user_id}@example.test")
+
+
 @pytest_asyncio.fixture
 async def client(sessionmaker_):
     async def override_get_session():
@@ -86,6 +101,7 @@ async def client(sessionmaker_):
             yield s
 
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_current_user] = _current_user_for_tests
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

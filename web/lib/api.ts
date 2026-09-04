@@ -1,13 +1,15 @@
+import { accessToken } from "./supabase";
 import type { ChatReply, Entitlements, Plan } from "./types";
 
 /**
  * All calls go through /api, which next.config.mjs rewrites to the FastAPI
  * service. Same-origin, so no CORS.
  *
- * The X-User-Id header is the development authentication stub -- the backend
- * refuses to accept it when ENVIRONMENT=production. When real auth lands, this
- * is the single place that changes: send a session cookie or bearer token
- * instead, and delete `userId` from every call site's concern.
+ * Authentication is the Supabase access token as a bearer credential. The
+ * backend verifies its signature against the project's JWKS on every request,
+ * so a token is proof of identity on its own — but the *tier* is always
+ * resolved server-side from the subscription, never from a claim in the token,
+ * because tokens are minted before a downgrade and stay valid after it.
  */
 
 export class ApiError extends Error {
@@ -21,12 +23,22 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, userId: string, init: RequestInit = {}): Promise<T> {
+/** Thrown when there is no session at all, so callers can send the user to sign in. */
+export class NotSignedIn extends ApiError {
+  constructor() {
+    super(401, null, "not signed in");
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = await accessToken();
+  if (!token) throw new NotSignedIn();
+
   const response = await fetch(`/api${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      "X-User-Id": userId,
+      Authorization: `Bearer ${token}`,
       ...(init.headers ?? {}),
     },
     cache: "no-store",
@@ -50,31 +62,30 @@ async function request<T>(path: string, userId: string, init: RequestInit = {}):
   return body as T;
 }
 
-export function getPlans(userId: string) {
-  return request<Plan[]>("/v1/billing/plans", userId);
+/** The pricing catalogue is public — it has to render before anyone signs up. */
+export async function getPlans(): Promise<Plan[]> {
+  const response = await fetch("/api/v1/billing/plans", { cache: "no-store" });
+  if (!response.ok) throw new ApiError(response.status, null, "could not load plans");
+  return response.json();
 }
 
-export function getEntitlements(userId: string) {
-  return request<Entitlements>("/v1/entitlements", userId);
+export function getEntitlements() {
+  return request<Entitlements>("/v1/entitlements");
 }
 
-export function startCheckout(
-  userId: string,
-  tier: string,
-  interval: "monthly" | "annual",
-) {
-  return request<{ checkout_url: string; session_id: string }>("/v1/billing/checkout", userId, {
+export function startCheckout(tier: string, interval: "monthly" | "annual") {
+  return request<{ checkout_url: string; session_id: string }>("/v1/billing/checkout", {
     method: "POST",
     body: JSON.stringify({ tier, interval }),
   });
 }
 
-export function openPortal(userId: string) {
-  return request<{ portal_url: string }>("/v1/billing/portal", userId, { method: "POST" });
+export function openPortal() {
+  return request<{ portal_url: string }>("/v1/billing/portal", { method: "POST" });
 }
 
-export function sendChat(userId: string, model: string, message: string) {
-  return request<ChatReply>("/v1/chat", userId, {
+export function sendChat(model: string, message: string) {
+  return request<ChatReply>("/v1/chat", {
     method: "POST",
     body: JSON.stringify({ model, message }),
   });

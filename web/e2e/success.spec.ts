@@ -1,4 +1,4 @@
-import { FakeApi, expect, mockApi, signInAs, test } from "./fixtures";
+import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
 
 /**
  * The success page is the one surface where the architecture is visible to the
@@ -7,7 +7,7 @@ import { FakeApi, expect, mockApi, signInAs, test } from "./fixtures";
  */
 
 test.beforeEach(async ({ page }) => {
-  await signInAs(page, "alice");
+  await signIn(page);
 });
 
 test("waits for the webhook, then confirms the plan", async ({ page }) => {

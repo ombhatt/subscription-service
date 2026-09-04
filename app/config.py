@@ -8,6 +8,16 @@ class Settings(BaseSettings):
 
     environment: str = "development"
 
+    # --- auth ---
+    # Supabase project URL, e.g. https://abcdefgh.supabase.co. Sessions are JWTs
+    # signed with the project's asymmetric key and verified against its JWKS.
+    supabase_url: str = ""
+    # The audience Supabase stamps on an access token for a signed-in user.
+    supabase_jwt_audience: str = "authenticated"
+    # Supabase caches JWKS at the edge for ten minutes and advises against
+    # holding them longer -- a revoked key has to stop working promptly.
+    jwks_cache_seconds: int = 600
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions"
     redis_url: str | None = "redis://localhost:6379/0"
     admin_api_key: str = "change-me-in-prod"

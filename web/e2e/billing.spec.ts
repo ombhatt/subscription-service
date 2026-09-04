@@ -1,7 +1,7 @@
-import { FakeApi, expect, mockApi, signInAs, test } from "./fixtures";
+import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await signInAs(page, "alice");
+  await signIn(page);
 });
 
 test("shows the plan, its renewal date and its usage", async ({ page }) => {
