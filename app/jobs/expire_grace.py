@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import dispose_engine, get_sessionmaker
 from app.models import Subscription, SubscriptionStatus
+from app.observability import configure_logging
+from app.observability import event as log_event
 from app.plans import Tier
 from app.policy import grace_expired
 from app.services import audit
@@ -60,10 +62,12 @@ async def expire_grace_windows(session: AsyncSession) -> list[str]:
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    from app.config import get_settings
+
+    configure_logging(json_logs=get_settings().log_json)
     async with get_sessionmaker()() as session:
         expired = await expire_grace_windows(session)
-    log.info("grace expired for %d subscriber(s): %s", len(expired), expired)
+    log_event(log, "grace.expired", count=len(expired), user_ids=expired)
     await dispose_engine()
 
 

@@ -370,8 +370,36 @@ DELETE /v1/admin/grants/{id}                  revoke
 GET    /v1/webhooks/recent                    webhook health at a glance
 ```
 
-Alert on three things and you catch nearly everything: webhook processing lag,
-payment failure rate, reconciliation drift.
+### Logs, correlation and metrics
+
+Logs are JSON, one object per line, so fields are queryable rather than grepped
+— including uvicorn's own access and error lines, which install their own
+handlers and would otherwise come out in a different format. Half-JSON output is
+worse than none, because an aggregator parses some lines and silently drops the
+rest. Set `LOG_JSON=false` locally if you would rather read them.
+
+Every request gets an `X-Request-ID`, generated or accepted from upstream, put on
+every log line it produces and echoed in the response — so a customer reporting a
+problem can quote something you can search for.
+
+`GET /metrics` (behind `X-Admin-Key`) exposes Prometheus metrics, including the
+three this file has always told you to alert on:
+
+| metric | what it tells you |
+|---|---|
+| `webhook_lag_seconds` | how far behind Stripe you are — the number that shows a backlog forming, unlike processing time, which stays flat while a queue grows |
+| `payment_failures_total` | failed renewals |
+| `reconciliation_drift` | subscriptions that disagreed with Stripe |
+| `webhook_events_total{event_type,outcome}` | processed / duplicate / ignored / failed |
+| `entitlement_cache_total{result}` | hit / miss / **stale** — a rising stale rate is an outage in progress |
+| `quota_rejections_total{quota,tier}` | how often the paywall actually fires |
+
+Two limits worth knowing. Metrics are per-process and in memory, so under
+several workers a scrape sees one of them — `prometheus_client`'s multiprocess
+mode is the fix when that day comes. And the cron jobs run in their own
+processes, so `reconciliation_drift` set there is invisible to a scrape of the
+web process: alert on the job's `reconcile.finished` log line instead, which
+carries `mismatched` as a field.
 
 ## Before this takes real money
 

@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     db_command_timeout_seconds: float = 15.0
     redis_timeout_seconds: float = 2.0
 
+    # --- observability ---
+    # JSON by default because that is what a log aggregator needs and the
+    # safe default is the production one. Set LOG_JSON=false locally if you
+    # would rather read it.
+    log_json: bool = True
+    log_level: str = "INFO"
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions"
     redis_url: str | None = "redis://localhost:6379/0"
     admin_api_key: str = "change-me-in-prod"

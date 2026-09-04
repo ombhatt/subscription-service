@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import stripe_client
 from app.db import dispose_engine, get_sessionmaker
 from app.models import PAID_STATUSES, Subscription
+from app.observability import configure_logging, reconciliation_drift
+from app.observability import event as log_event
 from app.services.subscriptions import STATUS_MAP, resolve_tier, sync_subscription_from_stripe
 
 log = logging.getLogger(__name__)
@@ -122,10 +124,24 @@ async def reconcile(session: AsyncSession, *, dry_run: bool = False) -> Reconcil
 
 
 async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    from app.config import get_settings
+
+    configure_logging(json_logs=get_settings().log_json)
     async with get_sessionmaker()() as session:
         report = await reconcile(session)
-    log.info("reconciliation: %s", report.as_dict())
+
+    reconciliation_drift.set(report.mismatched)
+    # The alertable signal. This runs in its own process, so a Gauge here is
+    # invisible to a scrape of the web process -- alert on this log line, not on
+    # the metric, unless you add a pushgateway.
+    log_event(
+        log,
+        "reconcile.finished",
+        checked=report.checked,
+        mismatched=report.mismatched,
+        repaired=report.repaired,
+        unknown_customers=len(report.unknown_customers),
+    )
     if report.mismatched:
         log.error("DRIFT: %d subscription(s) disagreed with Stripe", report.mismatched)
     await dispose_engine()

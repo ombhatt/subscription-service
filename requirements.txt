@@ -9,3 +9,4 @@ redis>=5.2
 stripe>=11.1
 python-dotenv>=1.0
 pyjwt[crypto]>=2.10
+prometheus-client>=0.21

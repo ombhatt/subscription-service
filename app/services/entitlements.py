@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import get_cache, get_json, set_json
 from app.config import get_settings
 from app.models import PAID_STATUSES, EntitlementGrant, Subscription
+from app.observability import entitlement_cache
 from app.plans import CATALOG, TIER_RANK, Tier, higher_tier, limits_for
 from app.policy import grace_ends_at, grace_expired
 from app.timeutil import as_utc
@@ -126,6 +127,7 @@ async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any
 async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str, Any]:
     cached = await get_json(_key(user_id))
     if cached is not None:
+        entitlement_cache.labels(result="hit").inc()
         return cached
 
     try:
@@ -133,9 +135,14 @@ async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str,
     except Exception:
         stale = await get_json(_stale_key(user_id))
         if stale is not None:
+            # Worth its own label: serving stale means the database is in
+            # trouble, and a rising rate here is an outage in progress.
+            entitlement_cache.labels(result="stale").inc()
             log.exception("entitlement lookup failed for %s; serving stale copy", user_id)
             return stale
         raise
+
+    entitlement_cache.labels(result="miss").inc()
 
     ttl = get_settings().entitlement_cache_ttl
     await set_json(_key(user_id), data, ttl)
