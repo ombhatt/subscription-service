@@ -14,6 +14,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
@@ -88,10 +89,19 @@ async def get_or_create_subscription(session: AsyncSession, user_id: str) -> Sub
     return sub
 
 
-async def _find_by_customer(session: AsyncSession, customer_id: str) -> Subscription | None:
-    result = await session.execute(
-        select(Subscription).where(Subscription.stripe_customer_id == customer_id)
-    )
+async def _find_by_customer(
+    session: AsyncSession, customer_id: str, *, lock: bool = False
+) -> Subscription | None:
+    """Find a subscription by provider customer id, optionally locking the row.
+
+    `lock=True` emits `SELECT ... FOR UPDATE`, so a concurrent sync for the same
+    customer waits rather than interleaving. SQLite silently omits the clause,
+    which is why the test suite still runs against it.
+    """
+    stmt = select(Subscription).where(Subscription.stripe_customer_id == customer_id)
+    if lock:
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -148,8 +158,25 @@ async def sync_subscription_from_stripe(
 
     Idempotent by construction: calling it twice with the same Stripe state
     produces the same row and only one audit entry.
+
+    Concurrent-safe by row lock. Stripe delivers several events for one customer
+    at once -- a checkout completing produces `checkout.session.completed`,
+    `customer.subscription.created` and `invoice.paid` within the same second --
+    and without a lock two workers both read the row, both call Stripe, and both
+    write. They usually agree, but if one call is slower it can land *after* the
+    other and overwrite newer state with older.
+
+    The order matters and is the whole point: take the lock **before** asking
+    Stripe. Locking afterwards would let both workers fetch the same stale
+    answer and merely serialise the writes, which fixes nothing. Locking first
+    means the second worker queries Stripe only once the first has finished, so
+    it necessarily sees state at least as new.
+
+    The cost is holding a row lock across a network call to Stripe -- a few
+    hundred milliseconds, and only ever contended by events for the same
+    customer.
     """
-    sub = await _find_by_customer(session, stripe_customer_id)
+    sub = await _find_by_customer(session, stripe_customer_id, lock=True)
     if sub is None:
         # First webhook for this customer, or a customer created outside our
         # checkout. The join key is the metadata we set at creation time.
@@ -158,8 +185,28 @@ async def sync_subscription_from_stripe(
         if not user_id:
             log.error("stripe customer %s has no user_id metadata; skipping", stripe_customer_id)
             return None
-        sub = await get_or_create_subscription(session, user_id)
-        sub.stripe_customer_id = stripe_customer_id
+
+        # There is no row to lock yet, so the burst of events that follows a
+        # first checkout can all arrive here at once. The unique constraints
+        # make that safe -- one insert wins -- but without this the losers raise,
+        # the webhook 500s, and every new customer leaves failures behind until
+        # Stripe retries. A savepoint keeps the failure local, then we take the
+        # row the winner created.
+        try:
+            async with session.begin_nested():
+                sub = await get_or_create_subscription(session, user_id)
+                sub.stripe_customer_id = stripe_customer_id
+                await session.flush()
+        except IntegrityError:
+            sub = await _find_by_customer(session, stripe_customer_id, lock=True)
+            if sub is None:
+                # Lost the race on user_id rather than customer id: the row
+                # exists but does not carry this customer yet.
+                sub = await get_subscription(session, user_id)
+            if sub is None:
+                raise
+            sub.stripe_customer_id = stripe_customer_id
+            log.info("lost the create race for %s; using the existing row", stripe_customer_id)
 
     before = audit.snapshot(sub)
     before_fingerprint = _fingerprint(sub)
