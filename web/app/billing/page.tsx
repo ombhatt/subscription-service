@@ -4,14 +4,15 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import QuotaMeter from "@/components/QuotaMeter";
-import { ApiError, getEntitlements, openPortal } from "@/lib/api";
-import type { Entitlements } from "@/lib/types";
-import { formatDate } from "@/lib/types";
+import { ApiError, getEntitlements, getSubscription, openPortal } from "@/lib/api";
+import type { Entitlements, SubscriptionSummary } from "@/lib/types";
+import { describeDiscount, formatDate } from "@/lib/types";
 import { useRequireSession } from "@/lib/user";
 
 export default function BillingPage() {
   const { email, ready } = useRequireSession();
   const [ents, setEnts] = useState<Entitlements | null>(null);
+  const [sub, setSub] = useState<SubscriptionSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -20,6 +21,11 @@ export default function BillingPage() {
     getEntitlements()
       .then(setEnts)
       .catch((err: Error) => setError(err.message));
+    // Separate call on purpose: what they pay is not part of the entitlements
+    // payload, which is the hot path and answers what they may do.
+    getSubscription()
+      .then(setSub)
+      .catch(() => setSub(null));
   }, [email, ready]);
 
   const manage = useCallback(async () => {
@@ -68,6 +74,16 @@ export default function BillingPage() {
               <strong>Subscription ending.</strong> You keep {ents.display_name} until{" "}
               {formatDate(ents.current_period_end)}, then move to Free. You can reactivate in
               the portal any time before then.
+            </div>
+          )}
+
+          {sub?.discount && (
+            <div className="banner">
+              <strong>Discount applied.</strong> {describeDiscount(sub.discount)}
+              {sub.discount.ends_at
+                ? ` — until ${formatDate(new Date(sub.discount.ends_at * 1000).toISOString())}.`
+                : "."}
+              {sub.discount.promotion_code ? " Redeemed with a promotion code." : ""}
             </div>
           )}
 

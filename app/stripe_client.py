@@ -144,7 +144,10 @@ async def fetch_current_subscription(customer_id: str) -> dict | None:
         customer=customer_id,
         status="all",
         limit=100,
-        expand=["data.items.data.price"],
+        # One expand deep enough to reach the coupon: the discount itself
+        # carries only an id and an end date, and the amount lives on the
+        # coupon. Without this it would take a second API call per sync.
+        expand=["data.items.data.price", "data.discounts.source.coupon"],
     )
     subscriptions = _as_dict(result).get("data", [])
     if not subscriptions:
@@ -162,7 +165,11 @@ async def fetch_current_subscription(customer_id: str) -> dict | None:
 async def list_subscriptions_page(starting_after: str | None = None, limit: int = 100) -> dict:
     """One page of every subscription on the account, for reconciliation."""
     api = _client()
-    params: dict[str, Any] = {"status": "all", "limit": limit, "expand": ["data.items.data.price"]}
+    params: dict[str, Any] = {
+        "status": "all",
+        "limit": limit,
+        "expand": ["data.items.data.price", "data.discounts.source.coupon"],
+    }
     if starting_after:
         params["starting_after"] = starting_after
     return _as_dict(await _call(api.Subscription.list, **params))
@@ -221,6 +228,44 @@ def subscription_period(sub: dict) -> tuple[int | None, int | None]:
         first = items[0]
         return first.get("current_period_start"), first.get("current_period_end")
     return None, None
+
+
+def subscription_discount(sub: dict) -> dict | None:
+    """The discount on a subscription, flattened into something storable.
+
+    Stripe moved from a single `discount` to a `discounts` array holding ids,
+    and the amount is not on the discount at all -- it lives on the coupon the
+    discount points at. Both shapes are read here so an API version change
+    cannot silently drop every customer's discount.
+
+    Only the first discount is kept. Stacking several is possible and would need
+    a real decision about how to display them; one is what a promotion code
+    produces.
+    """
+    discounts = sub.get("discounts") or []
+    raw = discounts[0] if discounts else sub.get("discount")
+    if not raw or isinstance(raw, str):
+        # Unexpanded: an id tells us a discount exists but nothing about it.
+        return None
+
+    source = raw.get("source") or {}
+    coupon = source.get("coupon") if isinstance(source.get("coupon"), dict) else None
+    # Older shape put the coupon directly on the discount.
+    coupon = coupon or (raw.get("coupon") if isinstance(raw.get("coupon"), dict) else None)
+    if coupon is None:
+        return None
+
+    return {
+        "coupon_id": coupon.get("id"),
+        "name": coupon.get("name"),
+        "percent_off": coupon.get("percent_off"),
+        "amount_off": coupon.get("amount_off"),
+        "currency": coupon.get("currency"),
+        "duration": coupon.get("duration"),
+        "duration_in_months": coupon.get("duration_in_months"),
+        "promotion_code": raw.get("promotion_code"),
+        "ends_at": raw.get("end"),
+    }
 
 
 def subscription_price(sub: dict) -> dict | None:

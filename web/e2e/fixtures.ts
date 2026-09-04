@@ -50,6 +50,7 @@ export interface FakeState {
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   graceEndsAt: string | null;
+  discount: Record<string, unknown> | null;
   /** Bumps the tier to this after N entitlement reads, to imitate a webhook landing. */
   grantAfterReads?: { reads: number; tier: Tier };
 }
@@ -69,6 +70,7 @@ export class FakeApi {
       currentPeriodEnd: null,
       cancelAtPeriodEnd: false,
       graceEndsAt: null,
+      discount: null,
       ...overrides,
     };
   }
@@ -115,6 +117,25 @@ export class FakeApi {
       current_period_end: this.state.currentPeriodEnd,
       cancel_at_period_end: this.state.cancelAtPeriodEnd,
       grace_ends_at: this.state.graceEndsAt,
+    };
+  }
+
+  subscription() {
+    return {
+      user_id: TEST_USER_ID,
+      tier: this.state.tier,
+      status: this.state.status,
+      stripe_customer_id: "cus_fake",
+      stripe_subscription_id: "sub_fake",
+      stripe_price_id: `price_${this.state.tier}_m`,
+      billing_interval: "monthly",
+      current_period_start: null,
+      current_period_end: this.state.currentPeriodEnd,
+      cancel_at_period_end: this.state.cancelAtPeriodEnd,
+      trial_end: null,
+      past_due_since: null,
+      disputed_at: null,
+      discount: this.state.discount,
     };
   }
 
@@ -177,6 +198,10 @@ export async function mockApi(page: Page, api: FakeApi) {
       return;
     }
     await route.fulfill({ json: api.entitlements(TEST_USER_ID) });
+  });
+
+  await page.route("**/api/v1/billing/subscription", async (route) => {
+    await route.fulfill({ json: api.subscription() });
   });
 
   await page.route("**/api/v1/billing/checkout", async (route) => {

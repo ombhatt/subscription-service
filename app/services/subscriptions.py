@@ -60,6 +60,8 @@ def _fingerprint(sub: Subscription) -> tuple:
         sub.cancel_at_period_end,
         sub.trial_end,
         sub.past_due_since,
+        # A discount ending changes what they pay and must invalidate the cache.
+        None if sub.discount is None else tuple(sorted(sub.discount.items())),
     )
 
 
@@ -247,6 +249,7 @@ def _apply_no_subscription(sub: Subscription) -> None:
     sub.cancel_at_period_end = False
     sub.trial_end = None
     sub.past_due_since = None
+    sub.discount = None
 
 
 def _apply_remote(sub: Subscription, remote: dict) -> None:
@@ -297,6 +300,7 @@ def _apply_remote(sub: Subscription, remote: dict) -> None:
     sub.current_period_end = _ts(period_end)
     sub.cancel_at_period_end = bool(remote.get("cancel_at_period_end"))
     sub.trial_end = _ts(remote.get("trial_end"))
+    sub.discount = stripe_client.subscription_discount(remote)
 
 
 async def mark_disputed(

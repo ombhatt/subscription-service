@@ -1,5 +1,5 @@
 import { accessToken } from "./supabase";
-import type { ChatReply, Entitlements, Plan } from "./types";
+import type { ChatReply, Entitlements, Plan, SubscriptionSummary } from "./types";
 
 /**
  * All calls go through /api, which next.config.mjs rewrites to the FastAPI
@@ -78,6 +78,10 @@ export function startCheckout(tier: string, interval: "monthly" | "annual") {
     method: "POST",
     body: JSON.stringify({ tier, interval }),
   });
+}
+
+export function getSubscription() {
+  return request<SubscriptionSummary>("/v1/billing/subscription");
 }
 
 export function openPortal() {

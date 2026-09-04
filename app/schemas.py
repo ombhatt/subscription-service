@@ -64,6 +64,9 @@ class SubscriptionSummary(BaseModel):
     trial_end: datetime | None
     past_due_since: datetime | None
     disputed_at: datetime | None
+    # What they pay, kept off the entitlements payload on purpose: that one is
+    # the hot path and answers what a user may *do*, not what they were charged.
+    discount: dict[str, Any] | None = None
 
 
 class GrantRequest(BaseModel):

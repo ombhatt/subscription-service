@@ -358,3 +358,42 @@ self-serve refunds, in-house invoice PDFs, coupon management screens.
 Seats are the one deferred item that changes the schema — a subscription stops
 belonging to a user — so if teams are on the roadmap, say so before this grows
 call sites.
+
+
+## Promotion codes
+
+Codes are created in the Stripe dashboard (Products → Coupons → promotion code)
+and redeemed on Stripe's Checkout page: `create_checkout_session` sets
+`allow_promotion_codes`, so the redemption box appears without any work here. A
+code can also be pre-applied by passing `promo_code` to `/v1/billing/checkout`,
+which attaches it as a `discounts` entry instead.
+
+**A discount changes what someone pays, never what they get.** `resolve_tier()`
+keys off the Stripe price id, so a 25%-off Pro subscriber is still on the Pro
+price and still resolves to Pro. Entitlements, quotas, dunning and the grace
+window need no knowledge of discounts at all. If you ever want a promotion to
+change *limits* rather than price, that is an
+[`entitlement_grant`](app/models.py), not a coupon.
+
+The active discount is mirrored onto the subscription row during sync and
+surfaced on `/v1/billing/subscription`, deliberately *not* on `/v1/entitlements`
+— that one is the hot path and answers what a user may do, not what they were
+charged.
+
+Reading it from Stripe needed care, and the shapes are asserted in
+[`tests/test_discounts.py`](tests/test_discounts.py) using real payloads:
+`subscription.discounts` is an array of *ids*, the legacy singular
+`subscription.discount` is gone, and the amount is not on the discount at all —
+it lives on the coupon, which only appears with
+`expand=["data.discounts.source.coupon"]`. Without that expand you learn only
+that a discount exists.
+
+Two things worth knowing before running a promotion:
+
+- **A 100%-off coupon is not a trial.** The subscription is `active`, not
+  `trialing`, and the invoice is 0, which cannot fail — so no dunning. Check
+  Checkout still collects a card, or the first real charge has nothing to bill.
+- **The pricing page shows list price.** `/v1/billing/plans` returns what the
+  price costs, not what a discounted subscriber pays. The frontend renders an
+  `Offer` rather than a raw number ([`web/lib/types.ts`](web/lib/types.ts)) so
+  that becomes a data change rather than a component change when it matters.

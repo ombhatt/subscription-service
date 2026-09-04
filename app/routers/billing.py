@@ -140,6 +140,7 @@ async def my_subscription(
         trial_end=sub.trial_end,
         past_due_since=sub.past_due_since,
         disputed_at=sub.disputed_at,
+        discount=sub.discount,
     )
 
 

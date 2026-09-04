@@ -91,3 +91,37 @@ test("a free user with no billing account is told, not broken", async ({ page })
 
   await expect(page.locator(".banner.error")).toContainText("no billing account yet");
 });
+
+
+test("a redeemed promotion code is shown, with its size and end date", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    discount: {
+      coupon_id: "LAUNCH25",
+      name: "Launch 25",
+      percent_off: 25,
+      amount_off: null,
+      currency: null,
+      duration: "repeating",
+      duration_in_months: 3,
+      promotion_code: "promo_1",
+      // 2027-01-04T00:00:00Z
+      ends_at: 1799020800,
+    },
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  const banner = page.locator(".banner", { hasText: "Discount applied" });
+  await expect(banner).toContainText("25% off for 3 months");
+  await expect(banner).toContainText("Jan 4, 2027");
+  await expect(banner).toContainText("promotion code");
+});
+
+
+test("no discount means no banner", async ({ page, api }) => {
+  await page.goto("/billing");
+  await expect(page.locator(".banner", { hasText: "Discount applied" })).toHaveCount(0);
+});
