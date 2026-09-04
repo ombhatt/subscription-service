@@ -70,7 +70,17 @@ class RedisBackend:
     def __init__(self, url: str) -> None:
         from redis.asyncio import from_url
 
-        self._redis = from_url(url, encoding="utf-8", decode_responses=True)
+        settings = get_settings()
+        # The cache sits in front of every request. If Redis stops answering it
+        # must fail quickly so the read path can fall back, rather than turning
+        # a cache problem into a latency problem for everyone.
+        self._redis = from_url(
+            url,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_timeout=settings.redis_timeout_seconds,
+            socket_connect_timeout=settings.redis_timeout_seconds,
+        )
 
     async def get(self, key: str) -> str | None:
         return await self._redis.get(key)

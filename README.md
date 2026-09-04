@@ -101,12 +101,24 @@ and out-of-order delivery converges. Event ids are recorded in
 returns `{"status": "duplicate"}`, while a previously *failed* one is allowed to
 run again, which is what Stripe's retry is for.
 
+Every outbound call is bounded. Stripe's SDK defaults to an **80-second**
+timeout with two retries, which would be four minutes of a held row lock (see
+below); it is set to 10 seconds here. Postgres statements, the row-lock wait and
+Redis operations are all bounded too, in [`app/config.py`](app/config.py) — the
+default for each of those is "wait indefinitely", and an unbounded wait
+somewhere is how one slow dependency becomes an outage.
+
 Events for one customer also arrive *simultaneously* — a checkout produces
 `checkout.session.completed`, `customer.subscription.created` and `invoice.paid`
 within the same second. So `sync` takes `SELECT ... FOR UPDATE` on the
 subscription row **before** asking Stripe. The order is the point: locking
 afterwards would let both workers fetch the same stale answer and merely
 serialise the writes, which fixes nothing.
+
+The holder of that lock is inside a network call, so the wait is bounded too:
+`lock_timeout` makes a second worker give up after 5 seconds rather than hold a
+connection until Stripe answers. It then returns 500 and Stripe retries on its
+own backoff, which is the right behaviour under exactly those conditions.
 
 ### The entitlement interface
 

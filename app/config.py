@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     # holding them longer -- a revoked key has to stop working promptly.
     jwks_cache_seconds: int = 600
 
+    # --- timeouts ---
+    # Every one of these exists because the default is 'wait indefinitely',
+    # and an unbounded wait somewhere is how one slow dependency becomes an
+    # outage. The Stripe one matters most: sync holds a row lock across that
+    # call, so its timeout is also the ceiling on how long other events for
+    # the same customer are blocked.
+    stripe_timeout_seconds: float = 10.0
+    # How long a *waiter* blocks for that row lock before giving up. Failing
+    # fast returns 500 and Stripe retries, which is far better than workers
+    # piling up on a lock that a degraded Stripe is holding.
+    db_lock_timeout_seconds: float = 5.0
+    db_command_timeout_seconds: float = 15.0
+    redis_timeout_seconds: float = 2.0
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions"
     redis_url: str | None = "redis://localhost:6379/0"
     admin_api_key: str = "change-me-in-prod"
