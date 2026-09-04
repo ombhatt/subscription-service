@@ -1,13 +1,22 @@
 # The frontend image.
 #
-# The awkward part of deploying this app is that NEXT_PUBLIC_* variables are
-# inlined into the client bundle by `next build`, not read at boot. So the
-# Supabase URL and anon key are build arguments, and an image built for one
-# Supabase project cannot be pointed at another by changing its environment --
-# it has to be rebuilt. Both values are public by design (the anon key is
-# meant to ship to browsers), so baking them in leaks nothing; the constraint
-# is operational, not a security one. API_ORIGIN, by contrast, is used by the
-# rewrite at request time and *is* a runtime variable.
+# The awkward part of deploying this app is that *everything* configurable is
+# baked in by `next build`, not read at boot.
+#
+# NEXT_PUBLIC_* are inlined into the client bundle. Both are public by design
+# (the anon key is meant to ship to browsers), so baking them in leaks
+# nothing; the constraint is operational.
+#
+# API_ORIGIN is the same, which is less obvious and was wrong here until a
+# container proved it: `rewrites()` is evaluated during the build and its
+# destination is frozen into .next/routes-manifest.json, and the standalone
+# output does not even include next.config.mjs to re-read. Setting API_ORIGIN
+# at runtime does nothing -- the app proxies to whatever it was built with,
+# so every API call 500s while both containers report healthy. `next dev`
+# reads the config live, which is exactly why this hides in development.
+#
+# So all three are build arguments, and pointing this image at a different
+# backend means rebuilding it.
 #
 # Vercel handles all of this for you and is the easier target for this app;
 # this image exists so the whole stack can be self-hosted.
@@ -26,8 +35,13 @@ COPY . .
 
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+# Where /api/* is proxied. Defaults to localhost so a plain `docker build`
+# still produces a working dev image; set it to the API's address for anything
+# real -- http://app:8000 under compose, https://your-api.fly.dev in production.
+ARG API_ORIGIN=http://localhost:8000
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    API_ORIGIN=$API_ORIGIN \
     NEXT_TELEMETRY_DISABLED=1
 
 # Fails the build rather than shipping a bundle with `undefined` baked in,

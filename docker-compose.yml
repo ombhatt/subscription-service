@@ -83,11 +83,22 @@ services:
       context: ./web
       args:
         # Build-time, not runtime: next inlines these into the browser bundle.
-        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?set this in .env, the web build fails without it}
-        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?set this in .env, the web build fails without it}
-    ports: ["3000:3000"]
-    environment:
-      API_ORIGIN: http://app:8000
+        #
+        # Defaulted to empty rather than `${VAR:?...}` on purpose. Compose
+        # interpolates the whole file before it looks at which services you
+        # asked for, so a required-variable guard here makes
+        # `docker compose up postgres redis` fail too -- you could not start a
+        # database without setting frontend build args. web/Dockerfile checks
+        # these itself and fails the build with the same message, at the point
+        # where they actually matter.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+        # Also build-time. It used to be set as runtime `environment:` here,
+        # where it did nothing: the rewrite destination is frozen into the
+        # build, so the container proxied to localhost and every API call
+        # returned 500 while both containers reported healthy.
+        API_ORIGIN: http://app:8000
+    ports: ["${WEB_PORT:-3000}:3000"]
     depends_on:
       app: {condition: service_started}
 
