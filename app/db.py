@@ -45,16 +45,27 @@ def engine_kwargs(url: str) -> dict[str, Any]:
         # SQLite (tests, and local development before Postgres) wants none of this.
         return {}
 
-    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    settings = get_settings()
+    kwargs: dict[str, Any] = {
+        "pool_pre_ping": True,
+        # Without this a statement waits forever. asyncpg applies it per query,
+        # so a wedged connection surfaces as an error rather than a hung worker.
+        "connect_args": {
+            "command_timeout": settings.db_command_timeout_seconds,
+            "timeout": settings.db_command_timeout_seconds,
+        },
+    }
 
     if TRANSACTION_POOLER_PORT in url:
-        kwargs["connect_args"] = {
-            # asyncpg's own statement cache, which a transaction pooler breaks.
-            "statement_cache_size": 0,
-            # Even with caching off, asyncpg names statements sequentially and
-            # two pooled sessions can collide. Unique names remove that.
-            "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
-        }
+        kwargs["connect_args"].update(
+            {
+                # asyncpg's own statement cache, which a transaction pooler breaks.
+                "statement_cache_size": 0,
+                # Even with caching off, asyncpg names statements sequentially and
+                # two pooled sessions can collide. Unique names remove that.
+                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+            }
+        )
         # SQLAlchemy keeps a cache of its own on top of asyncpg's.
         kwargs["prepared_statement_cache_size"] = 0
 

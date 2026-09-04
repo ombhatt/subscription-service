@@ -12,16 +12,41 @@ import asyncio
 from typing import Any
 
 import stripe
+from stripe._http_client import RequestsClient
 
 from app.config import get_settings
 
+_http_client: Any = None
+
 
 def _client() -> Any:
+    """Configure the SDK, including a timeout it does not set for you.
+
+    Stripe's default HTTP client waits **80 seconds** and retries twice, so an
+    unconfigured call can occupy a worker for four minutes. That matters more
+    here than in most integrations: `sync_subscription_from_stripe` holds a
+    `SELECT ... FOR UPDATE` on the subscription row across this call, so the
+    Stripe timeout is also the ceiling on how long every other event for that
+    customer waits.
+    """
+    global _http_client
     settings = get_settings()
     stripe.api_key = settings.stripe_secret_key
     if settings.stripe_api_version:
         stripe.api_version = settings.stripe_api_version
+
+    if _http_client is None:
+        _http_client = RequestsClient(timeout=settings.stripe_timeout_seconds)
+        stripe.default_http_client = _http_client
+
     return stripe
+
+
+def reset_http_client() -> None:
+    """Test seam, and the way to pick up a changed timeout."""
+    global _http_client
+    _http_client = None
+    stripe.default_http_client = None
 
 
 async def _call(fn, /, *args, **kwargs):

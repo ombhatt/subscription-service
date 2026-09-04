@@ -32,7 +32,18 @@ def test_the_session_pooler_keeps_prepared_statements():
     keeping -- this is the route to prefer for a long-running server."""
     kwargs = engine_kwargs(SESSION_POOLER)
     assert kwargs["pool_pre_ping"] is True
-    assert "connect_args" not in kwargs
+    # connect_args always carries timeouts now; what matters is that nothing
+    # here disables statement caching.
+    assert "statement_cache_size" not in kwargs["connect_args"]
+    assert "prepared_statement_cache_size" not in kwargs
+
+
+def test_every_postgres_route_bounds_its_statements():
+    """An unbounded statement is how one wedged query holds a worker forever."""
+    for url in (DIRECT, SESSION_POOLER, TRANSACTION_POOLER):
+        connect_args = engine_kwargs(url)["connect_args"]
+        assert connect_args["command_timeout"] > 0, url
+        assert connect_args["timeout"] > 0, url
 
 
 def test_the_transaction_pooler_disables_prepared_statements():

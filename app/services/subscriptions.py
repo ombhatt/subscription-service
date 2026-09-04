@@ -13,7 +13,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -99,12 +99,38 @@ async def _find_by_customer(
     `lock=True` emits `SELECT ... FOR UPDATE`, so a concurrent sync for the same
     customer waits rather than interleaving. SQLite silently omits the clause,
     which is why the test suite still runs against it.
+
+    On Postgres the wait is bounded. The holder of this lock is inside a network
+    call to Stripe, so if Stripe is degraded the lock is held for as long as that
+    call takes; without a bound, every other event for that customer would queue
+    behind it and hold a connection each. Timing out instead raises, the webhook
+    returns 500, and Stripe retries on its own backoff -- which is the behaviour
+    we want under exactly those conditions.
     """
     stmt = select(Subscription).where(Subscription.stripe_customer_id == customer_id)
     if lock:
+        await _bound_lock_wait(session)
         stmt = stmt.with_for_update()
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def _bound_lock_wait(session: AsyncSession) -> None:
+    """Limit how long the next statement waits for a row lock.
+
+    `set_config(..., true)` is transaction-local, so it applies to this sync and
+    nothing else. Parameterised rather than interpolated because `SET` does not
+    take bind parameters and building the statement by hand invites the obvious
+    mistake.
+    """
+    bind = session.get_bind()
+    if getattr(bind, "dialect", None) is None or bind.dialect.name != "postgresql":
+        return  # SQLite has no row locks to wait for
+    milliseconds = int(get_settings().db_lock_timeout_seconds * 1000)
+    await session.execute(
+        text("select set_config('lock_timeout', :value, true)"),
+        {"value": str(milliseconds)},
+    )
 
 
 # --------------------------------------------------------------------------
