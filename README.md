@@ -173,6 +173,19 @@ and out-of-order delivery converges. Event ids are recorded in
 returns `{"status": "duplicate"}`, while a previously *failed* one is allowed to
 run again, which is what Stripe's retry is for.
 
+Events for one customer also arrive *simultaneously* — a checkout produces
+`checkout.session.completed`, `customer.subscription.created` and `invoice.paid`
+within the same second. Without a lock two workers both read the row, both call
+Stripe, and both write; they usually agree, but a slower call can land after a
+newer one and overwrite it. So `sync` takes `SELECT ... FOR UPDATE` on the
+subscription row **before** asking Stripe. The order is the point: locking
+afterwards would let both workers fetch the same stale answer and merely
+serialise the writes, which fixes nothing.
+
+Measured against Postgres, two concurrent syncs 0.15s apart: the second worker's
+Stripe call began 2.6s later, at the exact moment the first committed. With the
+lock removed the two calls overlap.
+
 ### The entitlement interface
 
 The product never asks "what plan is this user on". It asks:
