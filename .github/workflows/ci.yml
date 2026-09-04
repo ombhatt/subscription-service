@@ -50,9 +50,11 @@ jobs:
     # The test suite runs on SQLite for speed, so this is the only place the
     # schema meets the engine it will actually run on. Worth its own job:
     # a migration that works on SQLite and fails on Postgres is a deploy outage.
+    # Pinned to the major version Supabase actually runs (17), not whatever
+    # was current when this was written.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

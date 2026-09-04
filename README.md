@@ -311,6 +311,9 @@ payment failure rate, reconciliation drift.
       no call to Supabase in the hot path, and a rotated key takes effect
       without a deploy. There is deliberately no development bypass in
       production code; the test suite overrides the dependency instead.
+- [x] **Postgres.** Running on the Supabase project's database via the session
+      pooler. See [`app/db.py`](app/db.py) for why that route rather than the
+      direct host or the transaction pooler — the choice is not cosmetic.
 - [ ] **Set `REDIS_URL`.** Without it the cache falls back to an in-process dict
       that is wrong under more than one worker.
 - [ ] **Change `ADMIN_API_KEY`**, and put the admin router behind your internal

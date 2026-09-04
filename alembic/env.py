@@ -7,6 +7,7 @@ from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import get_settings
+from app.db import engine_kwargs
 from app.models import Base
 
 config = context.config
@@ -38,7 +39,9 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = create_async_engine(_url())
+    # Same connection handling as the app: a transaction pooler breaks prepared
+    # statements, and a migration is exactly the wrong time to discover that.
+    engine = create_async_engine(_url(), **engine_kwargs(_url()))
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()
