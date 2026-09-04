@@ -22,13 +22,14 @@ something that has gone wrong in a real subscription system.
 
 ## What CI runs
 
-Three jobs, on every PR and every push to `main`:
+Four jobs, on every PR and every push to `main`:
 
 | job | what it proves |
 |---|---|
-| `service (py3.11, py3.12)` | `ruff` is clean and all 91 tests pass, on the declared floor and the next version |
+| `service (py3.11, py3.12)` | `ruff` is clean and all 116 tests pass, on the declared floor and the next version |
 | `migrations on postgres` | the schema applies to a real Postgres 17, rolls back, and applies again |
 | `web` | the production bundle builds, types check, and 30 Playwright specs pass against that bundle |
+| `images` | both images build, the API image migrates a real Postgres and answers both probes, and every log line it writes is JSON |
 
 The migrations job earns its place: the test suite runs on SQLite for speed, so
 this is the only place the schema meets the engine it will actually run on. It
@@ -37,6 +38,27 @@ work on the night you need it.
 
 The Playwright job runs against `next start`, not `next dev`, because dev mode
 compiles on demand and is not what ships.
+
+The `images` job builds *and runs* the containers rather than only building
+them. "It builds" is a much weaker claim than "it starts, migrates a database
+and answers its own probes" — and since these images cannot be built on a Mac
+without Docker installed, CI is the only place the Dockerfile is ever exercised.
+
+### Changing a dependency
+
+`requirements.txt` holds the direct dependencies and their floors.
+`requirements.lock` holds the full transitive tree at exact versions and is what
+the images and CI actually install.
+
+```bash
+# edit requirements.txt, then
+make lock
+make test
+```
+
+Commit both. A lock bump is a code change — the suite is what says whether it is
+a safe one, and reviewing the lock diff is how you notice that a patch release
+of something you have never heard of just entered production.
 
 ## Reviewing
 

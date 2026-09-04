@@ -15,7 +15,13 @@ case "${1:-api}" in
   api)
     # --proxy-headers so the app sees the client's scheme and address rather
     # than the load balancer's; --forwarded-allow-ips because uvicorn ignores
-    # those headers unless it is told the proxy is trusted.
+    # those headers unless it is told which proxy to trust.
+    #
+    # The default of "*" trusts whoever connects, which is only safe because
+    # the container is expected to be reachable solely through the load
+    # balancer. If it is ever exposed directly, set FORWARDED_ALLOW_IPS to the
+    # proxy's address -- otherwise any client can forge its own source IP in
+    # your logs.
     #
     # WEB_CONCURRENCY defaults to 1: /metrics is per-process and in memory, so
     # under N workers a scrape hits one of them at random. Raise it once

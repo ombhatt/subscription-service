@@ -42,10 +42,11 @@ containers gives the same capacity and four scrapeable targets, which is what
 your platform wants anyway. `WEB_CONCURRENCY` exists for the case where you
 have wired up `prometheus_client`'s multiprocess mode; until then leave it at 1.
 
-Memory is roughly 120–180MB per container at rest. The database connection pool
-is per-process, so total connections are `containers × pool size` — worth
-checking against your Postgres connection limit before scaling out. Supabase's
-session pooler exists exactly for this.
+A single idle worker sits around **90MB resident** (measured on macOS, not in
+the container, so treat it as an order of magnitude rather than a limit to set).
+The database connection pool is per-process, so total connections are
+`containers × pool size` — worth checking against your Postgres connection limit
+before scaling out. Supabase's session pooler exists exactly for this.
 
 ## Deploy sequence
 

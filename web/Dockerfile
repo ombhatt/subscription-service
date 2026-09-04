@@ -42,7 +42,10 @@ RUN npm run build
 
 FROM node:22-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000
+# HOSTNAME is set explicitly because Docker sets it to the container id, and
+# the standalone server reads `process.env.HOSTNAME` as its bind address --
+# so without this the server binds to a hostname that changes every run.
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 
 RUN useradd --create-home --uid 10001 next
 
