@@ -1,7 +1,7 @@
-import { FakeApi, expect, mockApi, signInAs, test } from "./fixtures";
+import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await signInAs(page, "bob");
+  await signIn(page);
 });
 
 test("a locked model names the tier that unlocks it", async ({ page, api }) => {

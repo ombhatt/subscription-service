@@ -39,7 +39,7 @@ export default function SuccessPage() {
       tries += 1;
       setAttempts(tries);
       try {
-        const current = await getEntitlements(userId);
+        const current = await getEntitlements();
         if (cancelled) return;
         setEnts(current);
         if (current.tier !== "free") return; // granted; stop polling

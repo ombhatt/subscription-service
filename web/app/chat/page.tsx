@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ApiError, getEntitlements, getPlans, sendChat } from "@/lib/api";
 import type { ChatReply, Entitlements, FeatureNotEntitled, Plan, QuotaExceeded } from "@/lib/types";
 import { formatDateTime } from "@/lib/types";
-import { useUser } from "@/lib/user";
+import { useRequireSession } from "@/lib/user";
 
 interface Turn {
   role: "me" | "them";
@@ -22,7 +22,7 @@ interface Turn {
  * tier contains.
  */
 export default function ChatPage() {
-  const { userId, ready } = useUser();
+  const { userId, ready } = useRequireSession();
   const [ents, setEnts] = useState<Entitlements | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [model, setModel] = useState("small");
@@ -34,7 +34,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!ready) return;
-    Promise.all([getEntitlements(userId), getPlans(userId)])
+    Promise.all([getEntitlements(), getPlans()])
       .then(([e, p]) => {
         setEnts(e);
         setPlans(p);
@@ -59,7 +59,7 @@ export default function ChatPage() {
 
   async function send(event: React.FormEvent) {
     event.preventDefault();
-    if (!userId || !draft.trim()) return;
+    if (!draft.trim()) return;
 
     const text = draft.trim();
     setSending(true);
@@ -67,7 +67,7 @@ export default function ChatPage() {
     setError(null);
 
     try {
-      const reply: ChatReply = await sendChat(userId, model, text);
+      const reply: ChatReply = await sendChat(model, text);
       setTurns((prev) => [...prev, { role: "me", text }, { role: "them", text: reply.reply }]);
       setDraft("");
       // Reflect the consumed message without a second round trip.

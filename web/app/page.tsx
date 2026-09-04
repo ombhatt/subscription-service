@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, getEntitlements, getPlans, openPortal, startCheckout } from "@/lib/api";
@@ -9,6 +10,7 @@ import { useUser } from "@/lib/user";
 
 export default function PricingPage() {
   const { userId, ready } = useUser();
+  const router = useRouter();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [ents, setEnts] = useState<Entitlements | null>(null);
   const [interval, setInterval] = useState<Interval>("monthly");
@@ -17,21 +19,32 @@ export default function PricingPage() {
 
   useEffect(() => {
     if (!ready) return;
-    Promise.all([getPlans(userId), getEntitlements(userId)])
-      .then(([p, e]) => {
-        setPlans(p);
-        setEnts(e);
-      })
+    // Plans are public: this is the pricing page, and has to render for someone
+    // who has never signed up.
+    getPlans()
+      .then(setPlans)
       .catch((err: Error) => setError(err.message));
+
+    if (!userId) {
+      setEnts(null);
+      return;
+    }
+    getEntitlements()
+      .then(setEnts)
+      .catch(() => setEnts(null));
   }, [userId, ready]);
 
   const upgrade = useCallback(
     async (tier: string) => {
-      if (!userId) return;
+      if (!userId) {
+        // Signed out: they can read the prices, they just cannot buy yet.
+        router.push("/login?next=/");
+        return;
+      }
       setBusy(tier);
       setError(null);
       try {
-        const { checkout_url } = await startCheckout(userId, tier, interval);
+        const { checkout_url } = await startCheckout(tier, interval);
         // Stripe's hosted page. Nothing is granted here -- the webhook does that.
         window.location.href = checkout_url;
       } catch (err) {
@@ -39,7 +52,7 @@ export default function PricingPage() {
         setBusy(null);
       }
     },
-    [userId, interval],
+    [userId, interval, router],
   );
 
   const manage = useCallback(async () => {
@@ -47,7 +60,7 @@ export default function PricingPage() {
     setBusy("portal");
     setError(null);
     try {
-      const { portal_url } = await openPortal(userId);
+      const { portal_url } = await openPortal();
       window.location.href = portal_url;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -57,7 +70,10 @@ export default function PricingPage() {
 
   if (!ready) return <p className="muted">Loading…</p>;
 
-  const currentTier = ents?.tier ?? "free";
+  // Null, not "free", when signed out: someone without an account has no
+  // current plan, and telling them Free is "their" plan is a small lie that
+  // makes the page look like it already knows them.
+  const currentTier = ents?.tier ?? null;
   const subscribed = ents?.source === "subscription";
 
   return (
@@ -93,9 +109,10 @@ export default function PricingPage() {
 
       <div className="grid-3">
         {plans.map((plan) => {
-          const isCurrent = plan.tier === currentTier;
+          const isCurrent = currentTier !== null && plan.tier === currentTier;
           const price = plan.prices[interval];
-          const isUpgrade = TIER_RANK[plan.tier] > TIER_RANK[currentTier];
+          // With no session every paid tier is an upgrade from nothing.
+          const isUpgrade = TIER_RANK[plan.tier] > (currentTier ? TIER_RANK[currentTier] : -1);
 
           return (
             <div key={plan.tier} className={`card plan${isCurrent ? " current" : ""}`}>

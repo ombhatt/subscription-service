@@ -11,3 +11,4 @@ venv/
 # never commit local env backups or overrides
 .env.*
 !.env.example
+!.env.local.example

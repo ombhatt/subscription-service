@@ -1,7 +1,7 @@
-import { FakeApi, expect, mockApi, signInAs, test } from "./fixtures";
+import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
-  await signInAs(page, "alice");
+  await signIn(page);
 });
 
 test("renders limits from config and amounts from Stripe", async ({ page }) => {

@@ -75,11 +75,20 @@ Four surfaces, all reading from the API rather than duplicating anything:
 same-origin requests and there is no CORS to configure. If you ever host the
 frontend on its own domain, drop the rewrite and add CORS middleware instead.
 
-Identity is the same development stub the API uses: the nav's **Switch user**
-control writes a name to `localStorage` and it is sent as `X-User-Id`. Switching
-between two users is the quickest way to watch one backend resolve two different
-entitlement sets. [`web/lib/api.ts`](web/lib/api.ts) is the single place that
-changes when real auth lands.
+Identity is a real Supabase session. `/login` signs in or signs up with email
+and password; the access token is sent to the API as a bearer credential by
+[`web/lib/api.ts`](web/lib/api.ts), and the backend verifies its signature.
+
+`useRequireSession` redirects signed-out visitors away from `/billing` and
+`/chat`. That is a rendering decision, not a security boundary — the API
+verifies every token itself, so someone who skipped it would reach a page whose
+every request 401s. It is deliberately client-side: Next middleware would have
+called Supabase's `getUser()` on every navigation, paying a network round trip
+per page load for protection that was never load-bearing.
+
+Copy [`web/.env.local.example`](web/.env.local.example) to `web/.env.local` and
+fill in your project's URL and **anon** key. Both are public by design. The
+`service_role` key must never appear there.
 
 The success page deserves a note: it grants nothing and cannot. It polls
 `/v1/entitlements` until the tier changes, and if the webhook never arrives it
@@ -297,10 +306,11 @@ payment failure rate, reconciliation drift.
 
 ## Before this takes real money
 
-- [ ] **Replace the auth stub.** [`app/auth.py`](app/auth.py) reads `X-User-Id`
-      and refuses to run in production. Wire it to your real session/JWT check.
-      Resolve the tier from this service, never from a claim in the token — a
-      downgrade has to take effect before the token expires.
+- [x] **Real authentication.** Supabase Auth. [`app/auth.py`](app/auth.py)
+      verifies the access token against the project's JWKS on every request —
+      no call to Supabase in the hot path, and a rotated key takes effect
+      without a deploy. There is deliberately no development bypass in
+      production code; the test suite overrides the dependency instead.
 - [ ] **Set `REDIS_URL`.** Without it the cache falls back to an in-process dict
       that is wrong under more than one worker.
 - [ ] **Change `ADMIN_API_KEY`**, and put the admin router behind your internal

@@ -28,6 +28,14 @@ export default defineConfig({
     // whatever dev server is already running.
     command: process.env.CI ? "npm run start" : "npm run dev",
     url: "http://localhost:3000",
+    // The app refuses to start without these. Real values are irrelevant here:
+    // every Supabase endpoint is intercepted, so these only need to exist.
+    env: {
+      NEXT_PUBLIC_SUPABASE_URL:
+        process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://test-project.supabase.co",
+      NEXT_PUBLIC_SUPABASE_ANON_KEY:
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "test-anon-key",
+    },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

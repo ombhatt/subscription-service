@@ -7,27 +7,27 @@ import QuotaMeter from "@/components/QuotaMeter";
 import { ApiError, getEntitlements, openPortal } from "@/lib/api";
 import type { Entitlements } from "@/lib/types";
 import { formatDate } from "@/lib/types";
-import { useUser } from "@/lib/user";
+import { useRequireSession } from "@/lib/user";
 
 export default function BillingPage() {
-  const { userId, ready } = useUser();
+  const { email, ready } = useRequireSession();
   const [ents, setEnts] = useState<Entitlements | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
-    getEntitlements(userId)
+    getEntitlements()
       .then(setEnts)
       .catch((err: Error) => setError(err.message));
-  }, [userId, ready]);
+  }, [email, ready]);
 
   const manage = useCallback(async () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
     try {
-      const { portal_url } = await openPortal(userId);
+      const { portal_url } = await openPortal();
       window.location.href = portal_url;
     } catch (err) {
       // 404 here means "no billing account yet" -- a free user who has never
@@ -35,7 +35,7 @@ export default function BillingPage() {
       setError(err instanceof ApiError ? err.message : String(err));
       setBusy(false);
     }
-  }, [userId, ready]);
+  }, [email, ready]);
 
   if (!ready || (!ents && !error)) return <p className="muted">Loading…</p>;
 
@@ -43,7 +43,7 @@ export default function BillingPage() {
     <>
       <h1>Billing</h1>
       <p className="lede">
-        What <code>{userId}</code> is entitled to right now, straight from{" "}
+        What <code>{email}</code> is entitled to right now, straight from{" "}
         <code>GET /v1/entitlements</code> — the one call the product makes.
       </p>
 

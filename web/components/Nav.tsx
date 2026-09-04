@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { useUser } from "@/lib/user";
 
@@ -14,15 +13,13 @@ const LINKS = [
 
 export default function Nav() {
   const pathname = usePathname();
-  const { userId, changeUser, ready } = useUser();
-  const [draft, setDraft] = useState("");
-  const [editing, setEditing] = useState(false);
+  const router = useRouter();
+  const { email, ready, signOut } = useUser();
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    changeUser(draft);
-    setEditing(false);
-    setDraft("");
+  async function handleSignOut() {
+    await signOut();
+    router.push("/");
+    router.refresh();
   }
 
   return (
@@ -40,32 +37,17 @@ export default function Nav() {
         ))}
 
         <div className="nav-right">
-          {/* Stands in for a session. Switching users is how you watch two
-              customers resolve to different entitlements against one backend. */}
-          {editing ? (
-            <form onSubmit={submit} className="inline">
-              <input
-                className="compact"
-                autoFocus
-                value={draft}
-                placeholder="user id"
-                onChange={(event) => setDraft(event.target.value)}
-                aria-label="Switch to user id"
-              />
-              <button type="submit">Switch</button>
-            </form>
-          ) : (
+          {!ready ? (
+            <span className="who">…</span>
+          ) : email ? (
             <>
-              <span className="who">{ready ? userId : "…"}</span>
-              <button
-                onClick={() => {
-                  setDraft(userId ?? "");
-                  setEditing(true);
-                }}
-              >
-                Switch user
-              </button>
+              <span className="who">{email}</span>
+              <button onClick={handleSignOut}>Sign out</button>
             </>
+          ) : (
+            <Link className="btn" href="/login">
+              Sign in
+            </Link>
           )}
         </div>
       </div>
