@@ -156,13 +156,35 @@ CHECKOUT_SUCCESS_URL / CHECKOUT_CANCEL_URL / PORTAL_RETURN_URL
 authentication — and makes the app refuse to start authenticating with the
 default admin key.
 
-The frontend's `NEXT_PUBLIC_*` values are **build arguments, not runtime
-environment**. `next build` inlines them into the browser bundle, so an image
-built against one Supabase project cannot be pointed at another by changing its
-environment; it has to be rebuilt. Both values are public by design, so nothing
-leaks by baking them in — the constraint is operational. The web image fails the
-build if they are missing rather than shipping a bundle with `undefined` in it,
-where the server looks healthy and every page throws in the browser.
+**Every frontend setting is a build argument, not runtime environment.** That
+is three variables, and the third is the one that bites.
+
+`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are inlined into
+the browser bundle by `next build`. Both are public by design, so nothing leaks
+by baking them in. The web image fails the build if they are missing rather than
+shipping a bundle with `undefined` in it, where the server looks healthy and
+every page throws in the browser.
+
+`API_ORIGIN` is build-time too, which is not obvious. `rewrites()` runs during
+the build and its destination is frozen into `.next/routes-manifest.json`; the
+standalone output does not even ship `next.config.mjs` to re-read. Set it at
+runtime and it is silently ignored — the frontend proxies to whatever it was
+built with, so **every API call returns 500 while both containers report
+healthy**. `next dev` reads the config live, which is precisely why this is
+invisible in development and only appears once it is containerised.
+
+So pointing the frontend at a different backend means rebuilding it:
+
+```bash
+docker build ./web \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=... \
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
+  --build-arg API_ORIGIN=https://your-api.fly.dev
+```
+
+On Vercel the same rule holds, but its environment variables are present at
+build time, so setting `API_ORIGIN` in project settings works — as long as you
+redeploy after changing it rather than expecting a restart to pick it up.
 
 Secrets go in your platform's secret store. Never in the image: `.dockerignore`
 excludes `.env`, because a secret copied into a layer stays in that layer even

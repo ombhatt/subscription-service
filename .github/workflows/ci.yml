@@ -253,8 +253,24 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=https://test-project.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=test-anon-key
+            API_ORIGIN=http://api-under-test:8000
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: The API origin was baked in, not silently defaulted
+        # Regression guard. API_ORIGIN looks like a runtime variable and is not:
+        # rewrites() runs at build time and the destination is frozen into the
+        # routes manifest. When this was passed as runtime `environment:`, the
+        # frontend proxied to localhost and every API call returned 500 while
+        # both containers reported healthy.
+        run: |
+          dest=$(docker run --rm --entrypoint sh subscription-web:ci \
+            -c 'grep -o "http://[^\"]*" .next/routes-manifest.json | sort -u')
+          echo "baked rewrite destination: $dest"
+          case "$dest" in
+            *api-under-test:8000*) echo "correct" ;;
+            *) echo "API_ORIGIN was not applied at build time; got: $dest"; exit 1 ;;
+          esac
 
       - name: The web image serves a page
         run: |
