@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import HTTPException
 
 from app import auth
@@ -21,8 +21,18 @@ ISSUER = "https://project.supabase.co/auth/v1"
 KID = "test-signing-key"
 
 
-def _keypair():
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+# Supabase signs with whichever the project was created with. New projects
+# default to ES256; the docs describe RS256 as the default, so both are pinned
+# in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would have
+# left the algorithm actually in use uncovered.
+ALGORITHMS = ["RS256", "ES256"]
+
+
+def _keypair(algorithm: str = "RS256"):
+    if algorithm == "ES256":
+        private = ec.generate_private_key(ec.SECP256R1())
+    else:
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_pem = private.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -41,15 +51,20 @@ class _StubJWKSClient:
         return type("Key", (), {"key": self._public_key})()
 
 
-@pytest.fixture
-def signer(monkeypatch):
-    """A working Supabase-shaped setup: configured URL and a known signing key."""
+@pytest.fixture(params=ALGORITHMS)
+def signer(request, monkeypatch):
+    """A working Supabase-shaped setup: configured URL and a known signing key.
+
+    Parametrised over both signing algorithms, because which one a project uses
+    is decided when the project is created, not by us.
+    """
+    algorithm = request.param
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     from app.config import get_settings
 
     get_settings.cache_clear()
-    private, private_pem = _keypair()
+    private, private_pem = _keypair(algorithm)
     auth.set_jwks_client(_StubJWKSClient(private.public_key()))
 
     def mint(**overrides) -> str:
@@ -65,7 +80,7 @@ def signer(monkeypatch):
         }
         claims.update(overrides)
         claims = {k: v for k, v in claims.items() if v is not None}
-        return jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": KID})
+        return jwt.encode(claims, private_pem, algorithm=algorithm, headers={"kid": KID})
 
     yield mint
 
@@ -110,8 +125,9 @@ def test_a_token_without_a_subject_is_refused(signer):
     assert raised.value.status_code == 401
 
 
-def test_a_token_signed_by_a_different_key_is_refused(signer):
-    _, other_pem = _keypair()
+def test_a_token_signed_by_a_different_key_is_refused(signer, request):
+    algorithm = request.node.callspec.params["signer"]
+    _, other_pem = _keypair(algorithm)
     forged = jwt.encode(
         {
             "sub": "attacker",
@@ -120,7 +136,7 @@ def test_a_token_signed_by_a_different_key_is_refused(signer):
             "exp": datetime.now(UTC) + timedelta(hours=1),
         },
         other_pem,
-        algorithm="RS256",
+        algorithm=algorithm,
         headers={"kid": KID},
     )
     with pytest.raises(HTTPException) as raised:
