@@ -1,0 +1,72 @@
+name: Nightly test clocks
+
+# Not on pull requests, deliberately. This suite needs a Stripe sandbox key and
+# the network, so it fails for reasons unrelated to the change under review --
+# and the drift it guards against (Stripe moving a field, changing a status
+# transition) arrives on its own schedule rather than with your commits.
+on:
+  schedule:
+    # 07:00 UTC — midnight Pacific, so a failure is waiting in the morning.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time: every run shares the same Stripe sandbox, and Stripe rate-limits
+# subscription requests. Never cancel a run in flight -- killing it mid-simulation
+# skips the fixture teardown and orphans a test clock.
+concurrency:
+  group: nightly-test-clocks
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    name: stripe sandbox lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_PRICE_PLUS_MONTHLY: ${{ secrets.STRIPE_PRICE_PLUS_MONTHLY }}
+      STRIPE_PRICE_PLUS_ANNUAL: ${{ secrets.STRIPE_PRICE_PLUS_ANNUAL }}
+      STRIPE_PRICE_PRO_MONTHLY: ${{ secrets.STRIPE_PRICE_PRO_MONTHLY }}
+      STRIPE_PRICE_PRO_ANNUAL: ${{ secrets.STRIPE_PRICE_PRO_ANNUAL }}
+      # Tags every clock this job creates, so cleanup can tell them apart from
+      # simulations opened by hand in the Dashboard.
+      TEST_CLOCK_PREFIX: "ci-"
+      ENVIRONMENT: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Check the key is present and is a sandbox key
+        run: |
+          if [ -z "${STRIPE_SECRET_KEY}" ]; then
+            echo "::error::STRIPE_SECRET_KEY secret is not set on this repository."
+            exit 1
+          fi
+          case "${STRIPE_SECRET_KEY}" in
+            sk_test_*) echo "sandbox key present" ;;
+            *) echo "::error::STRIPE_SECRET_KEY is not a sandbox key. Refusing to run."; exit 1 ;;
+          esac
+
+      - name: Lifecycle against real Stripe objects
+        run: pytest integration/ -v
+
+      # Runs even when the suite fails or the job is cancelled, so an interrupted
+      # run cannot leave customers and subscriptions parked on an orphaned clock.
+      # Only touches clocks this workflow created, and only once they are old
+      # enough that a concurrent run is not still using them.
+      - name: Clean up orphaned clocks
+        if: ${{ always() }}
+        run: python -m scripts.cleanup_test_clocks --prefix ci- --older-than 60
