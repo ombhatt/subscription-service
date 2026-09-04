@@ -24,11 +24,24 @@ async def lifespan(app: FastAPI):
     await dispose_engine()
 
 
+def docs_urls(settings) -> dict[str, str | None]:
+    """Where the schema and its viewers are served, if at all.
+
+    All three are unauthenticated by construction and publish every route,
+    parameter and model -- the admin surface included. Useful while building,
+    not something to serve to the internet.
+    """
+    if settings.is_production:
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
+
+
 app = FastAPI(
     title="Subscription service",
     description="Flat-price Free/Plus/Pro subscriptions on Stripe Billing.",
     version="0.1.0",
     lifespan=lifespan,
+    **docs_urls(get_settings()),
 )
 
 
