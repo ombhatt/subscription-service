@@ -328,7 +328,20 @@ export const test = base.extend<{ api: FakeApi }>({
     async ({ page }, use) => {
       const api = new FakeApi();
       await mockApi(page, api);
+
+      // An uncaught exception in the app otherwise surfaces as "element not
+      // found" several assertions later, which is a poor way to discover that
+      // a build-time environment variable was missing and every page crashed.
+      const crashes: string[] = [];
+      page.on("pageerror", (error) => crashes.push(error.message));
+
       await use(api);
+
+      if (crashes.length > 0) {
+        throw new Error(
+          `The page threw an uncaught exception:\n  ${crashes.join("\n  ")}`,
+        );
+      }
     },
     { auto: true },
   ],
