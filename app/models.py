@@ -87,6 +87,11 @@ class Subscription(Base):
     # Set when a chargeback arrives. Support looks at this before issuing anything.
     disputed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Mirrored from Stripe so the billing page and support can see a discount
+    # without an API call. A promotion code produces one of these; the shape
+    # is whatever stripe_client.subscription_discount() flattens it into.
+    discount: Mapped[dict | None] = mapped_column(JSONType)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

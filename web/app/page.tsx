@@ -1,11 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+
+import PriceTag from "@/components/PriceTag";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, getEntitlements, getPlans, openPortal, startCheckout } from "@/lib/api";
 import type { Entitlements, Interval, Plan } from "@/lib/types";
-import { TIER_RANK, formatLimit, formatMoney } from "@/lib/types";
+import { TIER_RANK, formatLimit, offerFor } from "@/lib/types";
 import { useUser } from "@/lib/user";
 
 export default function PricingPage() {
@@ -118,8 +120,12 @@ export default function PricingPage() {
             <div key={plan.tier} className={`card plan${isCurrent ? " current" : ""}`}>
               <div className="tag">{isCurrent ? "Current plan" : ""}</div>
               <h3>{plan.display_name}</h3>
-              <div className="mono" style={{ color: "var(--muted)", marginTop: 2 }}>
-                {plan.purchasable ? formatMoney(price, interval) : "Free"}
+              <div style={{ marginTop: 2 }}>
+                {plan.purchasable ? (
+                  <PriceTag offer={offerFor(price, interval)} />
+                ) : (
+                  <span className="price-now">Free</span>
+                )}
               </div>
 
               <ul>
