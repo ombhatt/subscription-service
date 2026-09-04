@@ -1,0 +1,36 @@
+# Keeping the build context small is secondary. The first job of this file is
+# making sure a secret cannot end up in an image layer: .env holds the Stripe
+# live key, and `COPY . .` in some future edit would bake it in permanently --
+# deleting it in a later layer does not remove it from the image.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+.git
+.github
+.gitignore
+
+# The frontend has its own image; shipping node_modules here would add
+# hundreds of megabytes to a Python image that cannot use them.
+web/
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+tests/
+integration/
+*.sqlite3
+docs/
+*.md
+!README.md
+Makefile
+docker-compose*.yml
+Dockerfile*
+playwright-report/

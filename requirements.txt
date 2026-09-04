@@ -1,3 +1,7 @@
+# The libraries this service depends on directly, with the floor for each.
+# This file records *intent*; requirements.lock records what actually gets
+# installed, transitive dependencies and all, and is what every build reads.
+# Change a floor here, then `make lock` and run the suite.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9

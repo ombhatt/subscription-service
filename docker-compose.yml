@@ -1,6 +1,21 @@
+# Two ways to use this file.
+#
+#   docker compose up -d postgres redis      the dependencies only, with the
+#                                            API and web running on your host
+#                                            under `make run` / `npm run dev`.
+#                                            This is the normal loop.
+#
+#   docker compose --profile full up --build the whole stack in containers,
+#                                            which is the thing worth doing
+#                                            before a deploy: it exercises the
+#                                            real images, the migration step
+#                                            and the startup ordering.
+#
+# `app` and `web` sit behind a profile so the plain `up` stays fast.
+
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -21,6 +36,60 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Migrations are their own service, not something the API does on boot.
+  # Two API containers starting together would both try to migrate; one wins,
+  # the other fails its first health check and gets restarted. Running the
+  # schema change once, to completion, before anything serves is the whole
+  # point -- and it is exactly what the platform deploy step should do too.
+  migrate:
+    profiles: ["full"]
+    build: .
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/subscriptions
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  app:
+    profiles: ["full"]
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/subscriptions
+      REDIS_URL: redis://redis:6379/0
+      LOG_JSON: "true"
+      # Everything below comes from your .env; compose substitutes it and
+      # leaves the value empty if it is unset, which the app reports through
+      # /v1/billing/health rather than crashing.
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-change-me-in-prod}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PLUS_MONTHLY: ${STRIPE_PRICE_PLUS_MONTHLY:-}
+      STRIPE_PRICE_PLUS_ANNUAL: ${STRIPE_PRICE_PLUS_ANNUAL:-}
+      STRIPE_PRICE_PRO_MONTHLY: ${STRIPE_PRICE_PRO_MONTHLY:-}
+      STRIPE_PRICE_PRO_ANNUAL: ${STRIPE_PRICE_PRO_ANNUAL:-}
+      AUTOMATIC_TAX: ${AUTOMATIC_TAX:-false}
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+
+  web:
+    profiles: ["full"]
+    build:
+      context: ./web
+      args:
+        # Build-time, not runtime: next inlines these into the browser bundle.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?set this in .env, the web build fails without it}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?set this in .env, the web build fails without it}
+    ports: ["3000:3000"]
+    environment:
+      API_ORIGIN: http://app:8000
+    depends_on:
+      app: {condition: service_started}
 
 volumes:
   pgdata:

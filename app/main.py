@@ -13,6 +13,7 @@ from app.cache import close_cache
 from app.config import get_settings
 from app.db import dispose_engine
 from app.errors import FeatureNotEntitled, QuotaExceeded
+from app.health import readiness
 from app.observability import (
     REGISTRY,
     configure_logging,
@@ -141,4 +142,24 @@ app.include_router(chat_demo.router)
 
 @app.get("/healthz", tags=["ops"])
 async def healthz() -> dict:
+    """Liveness. Deliberately checks nothing.
+
+    "Is this process able to serve a request" -- and nothing else. A liveness
+    probe that touches the database restarts every instance when the database
+    blinks, which is how a recoverable outage becomes a crash loop. Use
+    /readyz to decide whether to send traffic here.
+    """
     return {"status": "ok", "environment": get_settings().environment}
+
+
+@app.get("/readyz", tags=["ops"])
+async def readyz(response: Response) -> dict:
+    """Readiness. Checks the dependencies, and says which one is unhappy.
+
+    503 when Postgres is unreachable; 200 with status "degraded" when only
+    Redis is, because the read path survives that and a shared cache failure
+    must not empty the load balancer. See app/health.py.
+    """
+    status, payload = await readiness()
+    response.status_code = status
+    return payload
