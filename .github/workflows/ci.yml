@@ -308,71 +308,107 @@ jobs:
 
     # Its own job, and therefore its own check, so it can be marked required
     # in the branch ruleset. Folded into `service` it could only be required
-    # together with the tests, and a coverage drop would look like a test
-    # failure in the PR's check list.
+    # together with the tests, and a coverage drop would show up in the PR's
+    # check list looking like a test failure.
     #
-    # The floors are floors, not targets: set below where the suites actually
-    # sit, so this catches a real regression rather than failing every PR that
-    # adds a branch.
+    # Shape matters here. Measuring, reporting and gating are three separate
+    # steps, and the gate is last. The first version of this job combined them
+    # and died mid-step the moment coverage was low -- never writing the
+    # summary it existed to write, and skipping the frontend entirely, so you
+    # would fix the backend only to discover a frontend problem on the next
+    # run. Both numbers now always reach the summary, and one final step
+    # decides pass or fail.
 
     steps:
       - uses: actions/checkout@v4
 
-      # -- backend: floor of 80%, from fail_under in pyproject.toml --------
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - name: Install
-        run: pip install -r requirements-dev.txt
-
-      - name: Backend coverage
-        run: coverage run -m pytest -q
-
-      - name: Backend coverage report
-        run: |
-          # `|| true` here because this invocation also enforces the floor, and
-          # the summary is worth writing even when the gate is about to fail --
-          # otherwise the one number you need is missing exactly when you need it.
-          coverage report --skip-covered > /tmp/cov.txt || true
-          total=$(coverage report --format=total)
-          {
-            echo "### Backend coverage: ${total}% (floor 80%)"
-            echo
-            echo '```'
-            cat /tmp/cov.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Enforce the backend floor
-        # Exits 2 when below fail_under. Separated from the report above so a
-        # failure here reads as "coverage too low" rather than as a broken step.
-        run: coverage report
-
-      # -- frontend: thresholds from vitest.config.mts ---------------------
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci
 
-      - name: Frontend coverage
+      # -- measure ---------------------------------------------------------
+
+      - name: Measure backend coverage
+        run: coverage run -m pytest -q
+
+      - name: Measure frontend coverage
+        id: web_coverage
         working-directory: web
+        # The vitest thresholds fail this command. Recorded rather than acted
+        # on, so the report below still runs.
+        continue-on-error: true
         run: |
-          # pipefail matters: without it `tee` returns 0 and a failing suite
-          # would pass the step silently.
           set -o pipefail
           npm run coverage 2>&1 | tee /tmp/vitest.txt
+
+      # -- report ----------------------------------------------------------
+
+      - name: Report both numbers
+        if: always()
+        # Cannot fail. Every coverage invocation gets `|| true` because
+        # `coverage report` enforces fail_under itself, in every form,
+        # including --format=total -- which is what killed the first version
+        # of this step before it wrote anything.
+        run: |
+          coverage report --skip-covered > /tmp/cov.txt 2>&1 || true
+          total=$(coverage report --format=total 2>/dev/null | head -1 || true)
           {
-            echo "### Frontend unit coverage (web/lib)"
+            echo "## Coverage"
+            echo
+            echo "| | result | floor |"
+            echo "|---|---|---|"
+            echo "| backend | ${total:-n/a}% | 80% |"
+            echo "| web/lib | ${{ steps.web_coverage.outcome }} | vitest thresholds |"
+            echo
+            echo "<details><summary>Backend detail</summary>"
             echo
             echo '```'
-            sed -n '/Coverage summary/,/^===============/p' /tmp/vitest.txt
+            cat /tmp/cov.txt
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo '```'
+            sed -n '/Coverage summary/,/^===============/p' /tmp/vitest.txt 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # -- gate ------------------------------------------------------------
+
+      - name: Enforce the floors
+        if: always()
+        run: |
+          failed=0
+
+          # Exits 2 when below fail_under (80%, set in pyproject.toml).
+          if ! coverage report > /dev/null 2>&1; then
+            echo "::error::Backend coverage is below the 80% floor."
+            coverage report | tail -3
+            failed=1
+          else
+            echo "backend: at or above the floor"
+          fi
+
+          if [ "${{ steps.web_coverage.outcome }}" != "success" ]; then
+            echo "::error::web/lib coverage is below its vitest thresholds."
+            failed=1
+          else
+            echo "web/lib: at or above its thresholds"
+          fi
+
+          exit $failed
