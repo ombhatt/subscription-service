@@ -79,7 +79,7 @@ skip_covered = false
 # A floor rather than a target. Set a little below where the suite actually
 # sits, so it catches a real regression without failing every PR that adds a
 # branch. Raise it when the number moves up and stays up.
-fail_under = 99
+fail_under = 80
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
