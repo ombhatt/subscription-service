@@ -61,3 +61,28 @@ extend-immutable-calls = [
 # The interpreter guard is deliberately "unreachable" under target-version: its
 # whole job is to fire on an older interpreter than the one we target.
 "app/__init__.py" = ["UP036"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+# Without greenlet, coverage misses everything that runs inside SQLAlchemy's
+# async bridge -- which is most of the request path. Measured without it, the
+# whole webhook handler body reports as unreached while its tests pass, and
+# you go hunting for a gap that is not there. This one line is the difference
+# between a 70% report and a true 75%.
+concurrency = ["thread", "greenlet"]
+omit = ["app/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# A floor rather than a target. Set a little below where the suite actually
+# sits, so it catches a real regression without failing every PR that adds a
+# branch. Raise it when the number moves up and stays up.
+fail_under = 80
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",
+]

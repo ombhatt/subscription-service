@@ -40,8 +40,32 @@ jobs:
       - name: Lint
         run: ruff check app tests scripts integration
 
+      # Coverage on one interpreter only. Running it on both doubles the time
+      # for an identical number, and coverage's tracer slows the suite.
       - name: Tests
+        if: matrix.python != '3.12'
         run: pytest -q
+
+      - name: Tests with coverage
+        if: matrix.python == '3.12'
+        run: coverage run -m pytest -q
+
+      - name: Coverage report
+        if: matrix.python == '3.12'
+        run: |
+          # `|| true` because this invocation also enforces fail_under, and the
+          # summary is worth writing even when the gate is about to fail --
+          # otherwise the one number you need is missing exactly when you need it.
+          coverage report --skip-covered > /tmp/cov.txt || true
+          {
+            echo "### Backend coverage: $(coverage report --format=total)%"
+            echo
+            echo '```'
+            cat /tmp/cov.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # This one is the gate.
+          coverage report
 
   migrations:
     name: migrations on postgres
@@ -116,6 +140,23 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      # Before the build and the browsers: these are pure functions, they run
+      # in under a second, and there is no reason to wait five minutes to find
+      # out that a price is rounded the wrong way.
+      - name: Unit tests with coverage
+        run: |
+          # pipefail matters: without it `tee` returns 0 and a failing suite
+          # would pass the step silently.
+          set -o pipefail
+          npm run coverage 2>&1 | tee /tmp/vitest.txt
+          {
+            echo "### Frontend unit coverage (lib/)"
+            echo
+            echo '```'
+            sed -n '/Coverage summary/,/^===============/p' /tmp/vitest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # `next build` type-checks as part of building; the explicit typecheck
       # afterwards covers e2e/, which the build does not compile.

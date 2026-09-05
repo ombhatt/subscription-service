@@ -12,3 +12,9 @@ venv/
 .env.*
 !.env.example
 !.env.local.example
+
+# coverage output
+.coverage
+.coverage.*
+htmlcov/
+web/coverage/

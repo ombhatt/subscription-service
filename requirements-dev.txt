@@ -6,6 +6,7 @@
 # reason: a ruff release should change the build when we choose it to, not
 # when it happens to be published. Transitives are listed too.
 aiosqlite==0.22.1
+coverage==7.16.0
 httpcore==1.0.9
 httpx==0.28.1
 iniconfig==2.3.0

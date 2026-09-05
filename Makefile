@@ -4,7 +4,7 @@
 PYTHON ?= python3.11
 
 .PHONY: up down services services-down install lock migrate seed run test testclock lint \
-        image image-web stack stack-down
+        coverage coverage-html image image-web stack stack-down
 
 up:            ## start postgres + redis in docker
 	docker compose up -d
@@ -43,6 +43,15 @@ testclock:      ## lifecycle against real Stripe sandbox objects (needs .env key
 
 test:
 	.venv/bin/pytest -q
+
+coverage:      ## run the suite under coverage and print the report
+	.venv/bin/coverage run -m pytest -q
+	.venv/bin/coverage report
+
+coverage-html: ## same, but browsable -- htmlcov/index.html
+	.venv/bin/coverage run -m pytest -q
+	.venv/bin/coverage html
+	@echo "open htmlcov/index.html"
 
 lint:
 	.venv/bin/ruff check app tests scripts integration

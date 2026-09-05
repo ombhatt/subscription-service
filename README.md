@@ -313,10 +313,25 @@ scripts/
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # 91, service logic against a Stripe fake
-cd web && npx playwright test    # 30, frontend against a mocked API
-make testclock                   #  7, against real Stripe sandbox objects
+.venv/bin/pytest -q              # 134, service logic against a Stripe fake
+cd web && npm run test:unit      #  30, pure frontend logic, no browser
+cd web && npx playwright test    #  30, frontend against a mocked API
+make testclock                   #   7, against real Stripe sandbox objects
 ```
+
+Coverage is measured and enforced:
+
+```bash
+make coverage                    # backend, currently 83%, floor 80%
+cd web && npm run coverage       # web/lib, currently 100%
+```
+
+Both numbers are printed into the job summary on every pull request. One trap
+worth knowing if you ever run coverage by hand: it needs
+`concurrency = ["thread", "greenlet"]` (already set in `pyproject.toml`).
+Without it, everything running inside SQLAlchemy's async bridge is invisible —
+the entire webhook handler reports as unreached while its tests pass, and you
+go hunting for a gap that is not there.
 
 The **service** suite runs on SQLite with a Stripe fake — no network, no
 containers. What it asserts is the set of things that break subscription code in
@@ -325,7 +340,15 @@ being retried, a grandfathered price, an unrecognised price, a cancelled
 subscription Stripe still returns, and the grace window not restarting on every
 retry.
 
-The **frontend** suite ([`web/e2e`](web/e2e)) drives a real browser with
+The **frontend unit** suite ([`web/lib/types.test.ts`](web/lib/types.test.ts))
+covers the pure logic behind every price, discount and limit on screen —
+`offerFor`, `describeDiscount`, the money and date formatters. It needs no
+browser and runs in under a second. It asserts what the code *decides* (the
+arithmetic, the branch, the suffix, the fraction digits) rather than exact
+formatted strings, because `Intl` is called with an undefined locale and the
+symbols depend on the machine.
+
+The **frontend end-to-end** suite ([`web/e2e`](web/e2e)) drives a real browser with
 `/api/**` mocked, so it needs no backend. Two of its rules exist because of bugs
 that got through: the API fake is an `auto` fixture with a catch-all route, so a
 test cannot silently reach the real service by omission; and dates are asserted
