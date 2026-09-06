@@ -13,6 +13,7 @@ from app.cache import close_cache
 from app.config import get_settings
 from app.db import dispose_engine
 from app.errors import FeatureNotEntitled, QuotaExceeded
+from app.flags import close_flags, init_flags
 from app.health import readiness
 from app.observability import (
     REGISTRY,
@@ -31,7 +32,13 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Connecting is best-effort by construction: init_flags never raises and
+    # returns False when GrowthBook is unreachable, in which case the service
+    # runs on the defaults compiled into app/flags.py. A flag service being
+    # down must not stop this one from starting.
+    await init_flags()
     yield
+    await close_flags()
     await close_cache()
     await dispose_engine()
 

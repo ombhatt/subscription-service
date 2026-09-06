@@ -313,7 +313,7 @@ scripts/
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # 134, service logic against a Stripe fake
+.venv/bin/pytest -q              # 153, service logic against a Stripe fake
 cd web && npm run test:unit      #  35, pure frontend logic, no browser
 cd web && npx playwright test    #  45, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
@@ -426,6 +426,39 @@ POST   /v1/admin/grants                       comp a user to a tier
 DELETE /v1/admin/grants/{id}                  revoke
 GET    /v1/webhooks/recent                    webhook health at a glance
 ```
+
+### Feature flags
+
+Flags are how a change ships dark and gets turned on deliberately, and how a bad
+one gets turned off in seconds rather than in a deploy cycle. GrowthBook holds
+the rules; [`app/flags.py`](app/flags.py) is the only thing that talks to it.
+
+```python
+if not await is_enabled("checkout-enabled", user_id=user.id):
+    raise BillingError("Checkout is temporarily unavailable.", code=503)
+```
+
+Three properties, and the first is why the wrapper exists rather than calling
+the SDK directly:
+
+- **A flag outage cannot fail a request.** The SDK is fail-*closed*: when
+  `initialize()` cannot reach GrowthBook it returns `False` and every later
+  evaluation raises `RuntimeError: GrowthBook client not properly initialized`.
+  Called straight from a handler that is a 500 on every path that reads a flag —
+  the flag service taking down the application it exists to protect. Every call
+  here is wrapped and every failure returns the compiled-in default.
+- **The default lives in code.** `DEFAULTS` in `app/flags.py` is the reviewed,
+  checked-in intent; GrowthBook is an override. "What does this do by default"
+  stays answerable from the repository rather than only from a dashboard.
+- **Evaluation is local**, against an in-memory snapshot refreshed in the
+  background — measured at ~4µs, so it is safe in a hot handler. `GROWTHBOOK_*`
+  unset means flags are simply off and defaults apply, which is the local and
+  CI path.
+
+`feature_flag_evaluations_total{flag,source}` reports where each answer came
+from — `remote`, `default`, `error` or `unknown`. A rising `default` or `error`
+rate is how you find out flags are silently not applying, which otherwise
+presents as "I flipped it and nothing happened".
 
 ### Logs, correlation and metrics
 
