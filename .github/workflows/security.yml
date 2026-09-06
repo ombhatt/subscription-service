@@ -1,0 +1,187 @@
+# Is anything we already depend on known-vulnerable?
+#
+# The schedule is the point. A pull-request-only check answers "did this change
+# introduce something bad", which is useful but not the common case: far more
+# often an advisory is published against a version that has been sitting in
+# main for weeks. Nobody opens a pull request to tell you that. So this runs
+# daily as well as on pull requests, and the daily run is the one that earns
+# its keep.
+#
+# Dependabot (.github/dependabot.yml) is the other half -- it keeps things
+# current. This tells you when current is not good enough.
+
+name: Security
+
+on:
+  schedule:
+    # 06:20 UTC. Offset from the nightly Stripe job at 07:00 so a failure in
+    # one is unambiguous, and not on the hour, where every scheduled workflow
+    # on GitHub queues at once.
+    - cron: "20 6 * * *"
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # -- measure, then gate, so a finding on one side does not hide the
+      #    other. Fixing Python only to discover a JavaScript advisory on the
+      #    next run wastes a day for no reason.
+
+      - name: Audit Python
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          # The lock is what actually ships. Auditing requirements.txt would
+          # audit the floors, which is not what runs anywhere.
+          pip-audit -r requirements-lock.txt --progress-spinner=off 2>&1 | tee /tmp/pip-audit.txt
+
+      - name: Audit JavaScript
+        id: npm_audit
+        continue-on-error: true
+        working-directory: web
+        run: |
+          set -o pipefail
+          # Production and dev both: a compromised build-time package can put
+          # anything it likes into the bundle it builds.
+          npm audit --audit-level=high 2>&1 | tee /tmp/npm-audit.txt
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Dependency audit"
+            echo
+            echo "| ecosystem | result |"
+            echo "|---|---|"
+            echo "| python (requirements-lock.txt) | ${{ steps.pip_audit.outcome }} |"
+            echo "| javascript (web) | ${{ steps.npm_audit.outcome }} |"
+            echo
+            echo "<details><summary>pip-audit</summary>"
+            echo
+            echo '```'
+            cat /tmp/pip-audit.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "<details><summary>npm audit</summary>"
+            echo
+            echo '```'
+            cat /tmp/npm-audit.txt 2>/dev/null || echo "(no output)"
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if either found something
+        if: always()
+        run: |
+          failed=0
+          if [ "${{ steps.pip_audit.outcome }}" != "success" ]; then
+            echo "::error::pip-audit found a known vulnerability in requirements-lock.txt"
+            failed=1
+          fi
+          if [ "${{ steps.npm_audit.outcome }}" != "success" ]; then
+            echo "::error::npm audit found a high or critical advisory in web/"
+            failed=1
+          fi
+          [ $failed -eq 0 ] && echo "no known vulnerabilities in either ecosystem"
+          exit $failed
+
+  image:
+    name: image scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The dependency audit above covers what we declare. This covers what we
+    # inherit: the OS packages inside python:3.12-slim-bookworm and node:22-slim,
+    # which nothing in this repo pins and which accumulate CVEs between tag
+    # pushes.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: subscription-api:scan
+          cache-from: type=gha
+
+      - name: Scan it
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: subscription-api:scan
+          format: table
+          severity: HIGH,CRITICAL
+          # Unfixed base-image CVEs are noise you cannot act on: there is no
+          # newer package to install. Report the ones with a fix, which are the
+          # ones a rebuild would actually resolve.
+          ignore-unfixed: true
+          exit-code: "1"
+
+  codeql:
+    name: code scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The audits above ask whether our *dependencies* are known-bad. This asks
+    # whether our own code is. Different question, different failure mode --
+    # no advisory database will ever tell you that this repo mishandles a
+    # token, and the money paths here are worth a second opinion.
+    permissions:
+      contents: read
+      security-events: write   # to upload results to the Security tab
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python", "javascript-typescript"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          language: ${{ matrix.language }}
+          # security-extended adds lower-confidence rules. Worth it on a
+          # codebase this size, where the extra findings are reviewable rather
+          # than a flood.
+          queries: security-extended
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

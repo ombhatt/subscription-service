@@ -4,7 +4,7 @@
 PYTHON ?= python3.11
 
 .PHONY: up down services services-down install lock migrate seed run test testclock lint \
-        coverage coverage-html image image-web stack stack-down
+        coverage coverage-html audit image image-web stack stack-down
 
 up:            ## start postgres + redis in docker
 	docker compose up -d
@@ -26,7 +26,7 @@ install:
 	.venv/bin/pip install --upgrade pip
 	.venv/bin/pip install -r requirements-dev.txt
 
-lock:          ## regenerate requirements.lock after editing requirements.txt
+lock:          ## regenerate requirements-lock.txt after editing requirements.txt
 	PYTHON=$(PYTHON) ./scripts/lock.sh
 
 migrate:
@@ -55,6 +55,15 @@ coverage-html: ## same, but browsable -- htmlcov/index.html
 
 lint:
 	.venv/bin/ruff check app tests scripts integration
+
+# Installs pip-audit into .venv on first use -- about 28 transitive packages,
+# which is why it is not in requirements-dev.txt. CI installs it per-run instead.
+audit:         ## known vulnerabilities in what actually ships
+	@echo "--- python (requirements-lock.txt) ---"
+	@.venv/bin/pip install -q pip-audit 2>/dev/null || true
+	@.venv/bin/pip-audit -r requirements-lock.txt --progress-spinner=off || true
+	@echo "--- javascript (web) ---"
+	@cd web && npm audit --audit-level=high || true
 
 image:         ## build the API image (also runs the migrations and both jobs)
 	docker build -t subscription-api:local .

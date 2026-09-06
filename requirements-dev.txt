@@ -1,6 +1,6 @@
 # Everything the service runs with, at the exact versions it will run with.
 # CI installs this, so the suite tests the same tree the image ships.
--r requirements.lock
+-r requirements-lock.txt
 
 # Plus the tools that only exist to test and lint it, pinned for the same
 # reason: a ruff release should change the build when we choose it to, not
