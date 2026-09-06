@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import Banner from "@/components/Banner";
 import QuotaMeter from "@/components/QuotaMeter";
 import { ApiError, getEntitlements, getSubscription, openPortal } from "@/lib/api";
 import type { Entitlements, SubscriptionSummary } from "@/lib/types";
-import { describeDiscount, formatDate } from "@/lib/types";
+import { describeDiscount, formatDate, humanizeKey } from "@/lib/types";
 import { useRequireSession } from "@/lib/user";
 
 export default function BillingPage() {
@@ -43,7 +44,12 @@ export default function BillingPage() {
     }
   }, [email, ready]);
 
-  if (!ready || (!ents && !error)) return <p className="muted">Loading…</p>;
+  if (!ready || (!ents && !error))
+    return (
+      <p className="muted" role="status">
+        Loading…
+      </p>
+    );
 
   return (
     <>
@@ -54,44 +60,44 @@ export default function BillingPage() {
       </p>
 
       {error && (
-        <div className="banner error">
+        <Banner tone="error">
           <strong>Something went wrong.</strong> {error}
-        </div>
+        </Banner>
       )}
 
       {ents && (
         <div className="stack">
           {ents.grace_ends_at && (
-            <div className="banner warn">
+            <Banner tone="warn">
               <strong>Your last payment failed.</strong> You keep {ents.display_name} access
               until {formatDate(ents.grace_ends_at)} while we retry. Update your card in the
               billing portal to avoid dropping to Free.
-            </div>
+            </Banner>
           )}
 
           {ents.cancel_at_period_end && (
-            <div className="banner warn">
+            <Banner tone="warn">
               <strong>Subscription ending.</strong> You keep {ents.display_name} until{" "}
               {formatDate(ents.current_period_end)}, then move to Free. You can reactivate in
               the portal any time before then.
-            </div>
+            </Banner>
           )}
 
           {sub?.discount && (
-            <div className="banner">
+            <Banner>
               <strong>Discount applied.</strong> {describeDiscount(sub.discount)}
               {sub.discount.ends_at
                 ? ` — until ${formatDate(new Date(sub.discount.ends_at * 1000).toISOString())}.`
                 : "."}
               {sub.discount.promotion_code ? " Redeemed with a promotion code." : ""}
-            </div>
+            </Banner>
           )}
 
           {ents.source === "grant" && (
-            <div className="banner">
+            <Banner>
               <strong>Complimentary access.</strong> Your {ents.display_name} plan was granted
               directly rather than purchased.
-            </div>
+            </Banner>
           )}
 
           <div className="card">
@@ -115,7 +121,7 @@ export default function BillingPage() {
                 <Link className="btn" href="/">
                   {ents.tier === "free" ? "See plans" : "Change plan"}
                 </Link>
-                <button className="primary" onClick={manage} disabled={busy}>
+                <button className="primary" onClick={manage} disabled={busy} aria-busy={busy}>
                   {busy ? "Opening…" : "Manage billing"}
                 </button>
               </div>
@@ -133,17 +139,17 @@ export default function BillingPage() {
             <h2>What this plan includes</h2>
             <div className="rows">
               <div className="row-item">
-                <span className="k">models</span>
+                <span className="k">{humanizeKey("models")}</span>
                 <span className="v">{(ents.features.models ?? []).join(", ")}</span>
               </div>
               <div className="row-item">
-                <span className="k">context_tokens</span>
+                <span className="k">{humanizeKey("context_tokens")}</span>
                 <span className="v">
                   {(ents.features.context_tokens ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="row-item">
-                <span className="k">history_retention_days</span>
+                <span className="k">{humanizeKey("history_retention_days")}</span>
                 <span className="v">
                   {ents.features.history_retention_days === null
                     ? "Unlimited"
@@ -151,11 +157,11 @@ export default function BillingPage() {
                 </span>
               </div>
               <div className="row-item">
-                <span className="k">api_access</span>
+                <span className="k">{humanizeKey("api_access")}</span>
                 <span className="v">{ents.features.api_access ? "Yes" : "No"}</span>
               </div>
               <div className="row-item">
-                <span className="k">support_sla</span>
+                <span className="k">{humanizeKey("support_sla")}</span>
                 <span className="v">{String(ents.features.support_sla ?? "—")}</span>
               </div>
             </div>

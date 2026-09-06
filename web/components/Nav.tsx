@@ -23,7 +23,7 @@ export default function Nav() {
   }
 
   return (
-    <nav className="nav">
+    <nav className="nav" aria-label="Main">
       <div className="nav-inner">
         <span className="brand">Subscriptions</span>
         {LINKS.map((link) => (
@@ -31,6 +31,8 @@ export default function Nav() {
             key={link.href}
             href={link.href}
             className={pathname === link.href ? "active" : undefined}
+            // Without this the current page is signalled by an underline only.
+            aria-current={pathname === link.href ? "page" : undefined}
           >
             {link.label}
           </Link>
@@ -38,7 +40,7 @@ export default function Nav() {
 
         <div className="nav-right">
           {!ready ? (
-            <span className="who">…</span>
+            <span className="who" aria-hidden="true">…</span>
           ) : email ? (
             <>
               <span className="who">{email}</span>

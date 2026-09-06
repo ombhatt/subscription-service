@@ -315,7 +315,7 @@ scripts/
 ```bash
 .venv/bin/pytest -q              # 134, service logic against a Stripe fake
 cd web && npm run test:unit      #  30, pure frontend logic, no browser
-cd web && npx playwright test    #  30, frontend against a mocked API
+cd web && npx playwright test    #  45, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
 ```
 
@@ -347,6 +347,19 @@ browser and runs in under a second. It asserts what the code *decides* (the
 arithmetic, the branch, the suffix, the fraction digits) rather than exact
 formatted strings, because `Intl` is called with an undefined locale and the
 symbols depend on the machine.
+
+The **accessibility** suite ([`web/e2e/a11y.spec.ts`](web/e2e/a11y.spec.ts)) has
+two halves, because they catch different things. `axe` sweeps every page for the
+mechanical faults — an unnamed control, contrast below threshold, a broken
+heading order — and will notice a regression nobody thought to write a test for.
+It found exactly one real defect: `--muted` measured **3.99:1** on the page
+ground and **3.71:1** on a status pill, against a 4.5:1 requirement.
+
+What axe cannot judge is whether the page is *usable*. It has no opinion on
+whether a paywall that appears after a failed request is ever announced, or
+whether "nearly out of messages" survives being read aloud rather than looked
+at. Those are asserted by hand: live-region politeness, the quota meter's
+exposed values, the skip link, and every control's accessible name.
 
 The **frontend end-to-end** suite ([`web/e2e`](web/e2e)) drives a real browser with
 `/api/**` mocked, so it needs no backend. Two of its rules exist because of bugs
@@ -462,9 +475,9 @@ carries `mismatched` as a field.
 - [ ] **Change `ADMIN_API_KEY`**, and put the admin router behind your internal
       network or SSO rather than a shared secret. The code refuses to
       authenticate with the default value when `ENVIRONMENT=production`.
-- [ ] **Accessibility.** The billing pages have no ARIA anywhere: status
-      banners are not announced, and the quota meters convey state by colour
-      and bar width alone. This is the largest remaining gap in the frontend.
+- [x] **Accessibility** — banners announce through live regions, quota meters
+      expose their values, every control has a name, and axe checks each page
+      for WCAG A/AA on every pull request
 - [ ] **Rate limiting.** There is none. General throttling belongs at the edge;
       the three worth doing in-app are admin auth attempts, checkout creation
       per user, and any public promo-code lookup added later.

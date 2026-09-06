@@ -6,7 +6,11 @@
   --rule-strong: #b3bdc5;
   --ink: #141a20;
   --ink-2: #3d4852;
-  --muted: #6b7883;
+  /* 4.5:1 against every background it is used on -- the page ground, white
+     cards and .surface-2 pills. The previous #6b7883 measured 3.99:1 on the
+     ground and 3.71:1 on a pill, which axe flags as a serious violation and
+     which is genuinely hard to read in daylight. */
+  --muted: #5c6873;
   --accent: #0b6257;
   --accent-ink: #ffffff;
   --accent-soft: #d6e7e3;
@@ -545,4 +549,68 @@ input.compact {
   background: var(--accent-soft);
   padding: 2px 7px;
   border-radius: 999px;
+}
+
+
+/* --------------------------------------------------------------------------
+   Accessibility helpers
+   -------------------------------------------------------------------------- */
+
+/* Present to a screen reader, absent to the eye. Used for control labels where
+   the visual design carries the meaning by position (the chat model picker and
+   message box sit inside a form whose purpose is obvious to look at, and not at
+   all obvious when read aloud one control at a time).
+   Not `display: none` or `visibility: hidden` -- both remove it from the
+   accessibility tree too, which defeats the point. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* First control in the tab order, revealed only when focused, so a keyboard
+   user can jump the nav instead of tabbing through it on every page. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -48px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* The bar is a second channel for the same fact, not the only one -- the words
+   next to it say "Nearly used up" / "None left". */
+.meter-note.high {
+  color: var(--amber);
+}
+
+.meter-note.full {
+  color: var(--red);
+}
+
+/* main takes focus from the skip link but is not itself interactive, so it
+   should not draw a focus ring. */
+main:focus {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link {
+    transition: none;
+  }
 }

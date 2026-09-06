@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
+import Banner from "@/components/Banner";
 import { supabase } from "@/lib/supabase";
 
 type Mode = "sign-in" | "sign-up";
@@ -69,9 +70,9 @@ function LoginForm() {
       </p>
 
       {error && (
-        <div className="banner error">
+        <Banner tone="error">
           <strong>That didn&apos;t work.</strong> {error}
-        </div>
+        </Banner>
       )}
 
       <div className="card" style={{ maxWidth: 420 }}>
@@ -99,7 +100,7 @@ function LoginForm() {
             />
           </label>
 
-          <button className="primary" type="submit" disabled={busy}>
+          <button className="primary" type="submit" disabled={busy} aria-busy={busy}>
             {busy ? "Working…" : mode === "sign-in" ? "Sign in" : "Create account"}
           </button>
         </form>
@@ -107,6 +108,7 @@ function LoginForm() {
         <p className="muted" style={{ marginTop: 14, marginBottom: 0 }}>
           {mode === "sign-in" ? "No account yet? " : "Already have an account? "}
           <button
+            type="button"
             style={{ border: "none", background: "none", padding: 0, color: "var(--accent)" }}
             onClick={() => {
               setMode(mode === "sign-in" ? "sign-up" : "sign-in");
@@ -124,7 +126,13 @@ function LoginForm() {
 export default function LoginPage() {
   // useSearchParams needs a Suspense boundary to prerender.
   return (
-    <Suspense fallback={<p className="muted">Loading…</p>}>
+    <Suspense
+      fallback={
+        <p className="muted" role="status">
+          Loading…
+        </p>
+      }
+    >
       <LoginForm />
     </Suspense>
   );

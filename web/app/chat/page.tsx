@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import Banner from "@/components/Banner";
 import { ApiError, getEntitlements, getPlans, sendChat } from "@/lib/api";
 import type { ChatReply, Entitlements, FeatureNotEntitled, Plan, QuotaExceeded } from "@/lib/types";
 import { formatDateTime } from "@/lib/types";
@@ -94,7 +95,12 @@ export default function ChatPage() {
     }
   }
 
-  if (!ready) return <p className="muted">Loading…</p>;
+  if (!ready)
+    return (
+      <p className="muted" role="status">
+        Loading…
+      </p>
+    );
 
   return (
     <>
@@ -105,13 +111,13 @@ export default function ChatPage() {
       </p>
 
       {error && (
-        <div className="banner error">
+        <Banner tone="error">
           <strong>Request failed.</strong> {error}
-        </div>
+        </Banner>
       )}
 
       {blocked?.error === "feature_not_entitled" && (
-        <div className="banner warn">
+        <Banner tone="warn">
           <div className="row">
             <span>
               <strong>{blocked.feature.replace("model:", "")}</strong> is not on the{" "}
@@ -122,11 +128,11 @@ export default function ChatPage() {
               See plans
             </Link>
           </div>
-        </div>
+        </Banner>
       )}
 
       {blocked?.error === "quota_exceeded" && (
-        <div className="banner warn">
+        <Banner tone="warn">
           <div className="row">
             <span>
               <strong>Daily limit reached.</strong> You have used all{" "}
@@ -140,12 +146,12 @@ export default function ChatPage() {
               </Link>
             )}
           </div>
-        </div>
+        </Banner>
       )}
 
       <div className="card">
         {turns.length > 0 && (
-          <div className="chat-log">
+          <div className="chat-log" role="log" aria-label="Conversation" aria-live="polite">
             {turns.map((turn, index) => (
               <div key={index} className={`bubble ${turn.role}`}>
                 {turn.text}
@@ -155,7 +161,14 @@ export default function ChatPage() {
         )}
 
         <form onSubmit={send} className="inline">
-          <select value={model} onChange={(event) => setModel(event.target.value)}>
+          <label className="sr-only" htmlFor="chat-model">
+            Model
+          </label>
+          <select
+            id="chat-model"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+          >
             {allModels.map((name) => {
               const locked = !unlocked.includes(name);
               return (
@@ -166,13 +179,22 @@ export default function ChatPage() {
               );
             })}
           </select>
+          <label className="sr-only" htmlFor="chat-message">
+            Message
+          </label>
           <input
+            id="chat-message"
             style={{ flex: 1, minWidth: 200 }}
             value={draft}
             placeholder="Say something…"
             onChange={(event) => setDraft(event.target.value)}
           />
-          <button className="primary" type="submit" disabled={sending || !draft.trim()}>
+          <button
+            className="primary"
+            type="submit"
+            disabled={sending || !draft.trim()}
+            aria-busy={sending}
+          >
             {sending ? "Sending…" : "Send"}
           </button>
         </form>
