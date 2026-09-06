@@ -1,28 +1,40 @@
-# Keeps dependencies moving on a schedule rather than only when something
-# breaks. This is the "stay current" half; `security.yml` is the "is anything
-# we already have known-vulnerable" half. Neither replaces the other: an
-# advisory published today applies to the versions already in main, which no
-# amount of updating-on-merge would have caught.
+# Keeps dependencies moving on a schedule. `security.yml` is the other half --
+# it asks whether what we already have is known-vulnerable, daily. Neither
+# replaces the other.
 #
-# Grouped and capped on purpose. Five separate PRs a week for patch bumps is
-# how a team learns to rubber-stamp Dependabot, and a rubber-stamped security
-# update is worse than none.
+# The shape below is the result of watching the first run open thirteen pull
+# requests at once, two of which could never be merged. Three lessons are
+# baked in:
+#
+# 1. Grouping only applies to the update-types you list. Grouping minor and
+#    patch leaves every major to arrive on its own, which is how one config
+#    change became thirteen PRs.
+# 2. Dependabot's pip ecosystem reads a flat .txt as a list of *direct*
+#    requirements. Pointed at a generated lock it proposes single-package
+#    bumps that ignore the constraints between them -- it offered
+#    pydantic-core 2.48.0 while pydantic pins pydantic-core==2.46.5 exactly,
+#    which is unresolvable and would have been reproposed forever. So the lock
+#    is named requirements.lock, which Dependabot does not parse, and stays a
+#    generated artefact: `make lock` regenerates the whole tree coherently,
+#    and pip-audit covers it for advisories.
+# 3. Packages that must move together have to be grouped together, or
+#    Dependabot splits them and breaks the peer constraint.
 
 version: 2
 updates:
-  # The production tree. Dependabot only reads files it recognises as
-  # requirements files, which is why the lock is named requirements-lock.txt
-  # rather than requirements.lock -- under the old name these pins, the ones
-  # that actually ship, were invisible to it.
+  # Direct dependencies and their floors, plus the dev tooling. Everything in
+  # one group: a bump here is followed by `make lock` and a full suite run, so
+  # there is no value in splitting it across PRs.
   - package-ecosystem: pip
     directory: "/"
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      python-patch-and-minor:
-        update-types: ["minor", "patch"]
+      python:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     labels: ["dependencies", "python"]
 
   - package-ecosystem: npm
@@ -30,30 +42,65 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     groups:
-      js-patch-and-minor:
+      # vitest and its coverage provider peer-depend on each other at the
+      # exact same version. Split across two PRs, neither can merge.
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
+        update-types: ["major", "minor", "patch"]
+      js:
+        patterns: ["*"]
+        exclude-patterns: ["vitest", "@vitest/*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # Framework and language majors are migrations, not updates. next 16 and
+      # typescript 7 each want a branch and a test pass of their own, not an
+      # automated PR that sits open going stale.
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node must track the Node major we actually run (22). Dependabot
+      # offered 26, which would type-check against APIs that are not there.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     labels: ["dependencies", "javascript"]
 
-  # Actions are code that runs with a token against this repo. A stale pinned
-  # action is a supply-chain risk, not a housekeeping item.
+  # Actions run with a token against this repo, so staleness here is a supply
+  # chain risk rather than housekeeping. All update types in one group: five
+  # separate PRs to move five actions forward one major is pure noise, and
+  # they are routinely safe.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     labels: ["dependencies", "ci"]
 
-  # Base images accumulate OS-level CVEs between tag pushes. These are pinned
-  # to a minor tag, so this catches the case where the tag itself moves on.
+  # Base images, for the patch-level rebuilds that pick up OS security fixes.
+  # Runtime majors are excluded: Dependabot offered python 3.14 while the
+  # test matrix is 3.11/3.12 and pyproject declares 3.11 as the floor, and
+  # node 26 while the app is built and tested on 22. Those are deliberate
+  # upgrades, not dependency bumps.
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     labels: ["dependencies", "docker"]
 
   - package-ecosystem: docker
     directory: "/web"
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
     labels: ["dependencies", "docker"]

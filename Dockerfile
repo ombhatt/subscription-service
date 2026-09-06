@@ -17,12 +17,12 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copied alone so the dependency layer is cached until the lock itself changes.
-COPY requirements-lock.txt ./
+COPY requirements.lock ./
 # --no-deps is deliberate: the lock is meant to be the complete transitive
 # tree, so letting pip resolve again could pull in something the lock does not
 # name. `pip check` then verifies that claim -- if the lock is missing a
 # dependency, the build fails here instead of the container failing on import.
-RUN pip install --no-deps -r requirements-lock.txt && pip check
+RUN pip install --no-deps -r requirements.lock && pip check
 
 # -------------------------------------------------------------- runtime ----
 FROM python:3.12-slim-bookworm AS runtime

@@ -84,7 +84,7 @@ weeks, and nobody opens a pull request to tell you that. Three jobs:
 
 | job | what it checks |
 |---|---|
-| `dependency audit` | `pip-audit` against `requirements-lock.txt`, `npm audit` against `web/` |
+| `dependency audit` | `pip-audit` against `requirements.lock`, `npm audit` against `web/` |
 | `image scan` | Trivy against the built API image — the OS packages we inherit from the base image, which nothing here pins |
 | `code scanning` | CodeQL over Python and TypeScript; results land in the Security tab |
 
@@ -93,9 +93,22 @@ current, weekly, grouped so patch bumps arrive as one reviewable pull request
 rather than five rubber-stamped ones. It covers pip, npm, GitHub Actions and
 both Dockerfiles.
 
-The lock is named `requirements-lock.txt`, not `requirements.lock`, for one
-reason: Dependabot only parses files it recognises as requirements files, and
-under the old name the pins that actually ship were invisible to it.
+The lock is deliberately named `requirements.lock` and **not** `.txt`, so
+Dependabot does not parse it. Dependabot's pip ecosystem reads a flat `.txt`
+as a list of *direct* requirements with no notion of the constraints between
+them; pointed at a generated lock it proposes single-package bumps that cannot
+resolve — it offered `pydantic-core 2.48.0` while `pydantic` pins
+`pydantic-core==2.46.5` exactly. So the lock stays a generated artefact:
+Dependabot manages `requirements.txt` and `requirements-dev.txt`, `make lock`
+regenerates the whole tree coherently, and `pip-audit` covers the lock for
+advisories daily.
+
+That is also why `requirements-dev.txt` no longer does `-r requirements.lock`.
+Install both explicitly:
+
+```bash
+pip install -r requirements.lock -r requirements-dev.txt
+```
 
 Locally:
 
@@ -109,8 +122,9 @@ holds floors, which is not what runs anywhere.
 ### Changing a dependency
 
 `requirements.txt` holds the direct dependencies and their floors.
-`requirements-lock.txt` holds the full transitive tree at exact versions and is what
-the images and CI actually install.
+`requirements.lock` holds the full transitive tree at exact versions and is what
+the images and CI actually install. It is generated — never hand-edit it, and
+never let a bot edit it either.
 
 ```bash
 # edit requirements.txt, then

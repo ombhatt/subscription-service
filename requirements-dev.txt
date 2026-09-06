@@ -1,10 +1,14 @@
-# Everything the service runs with, at the exact versions it will run with.
-# CI installs this, so the suite tests the same tree the image ships.
--r requirements-lock.txt
-
-# Plus the tools that only exist to test and lint it, pinned for the same
-# reason: a ruff release should change the build when we choose it to, not
-# when it happens to be published. Transitives are listed too.
+# Test and lint tooling only, pinned for the same reason the runtime tree is:
+# a ruff release should change the build when we choose it to, not when it
+# happens to be published. Transitives are listed too.
+#
+# Deliberately does NOT `-r requirements.lock`. Install both together:
+#
+#     pip install -r requirements.lock -r requirements-dev.txt
+#
+# Keeping them separate is what lets Dependabot manage this file and
+# requirements.txt while leaving the generated lock alone -- see the note in
+# .github/dependabot.yml for why that separation matters.
 aiosqlite==0.22.1
 coverage==7.16.0
 httpcore==1.0.9
