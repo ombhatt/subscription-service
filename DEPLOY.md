@@ -151,6 +151,25 @@ STRIPE_PRICE_{PLUS,PRO}_{MONTHLY,ANNUAL}=price_...
 CHECKOUT_SUCCESS_URL / CHECKOUT_CANCEL_URL / PORTAL_RETURN_URL
 ```
 
+Optional, but the reason flags exist:
+
+```
+GROWTHBOOK_CLIENT_KEY=sdk-...      the SDK connection's *client* key, not a
+                                   secret_ API key -- the CDN rejects those
+                                   with a 400
+```
+
+Unset, every flag uses the default compiled into `app/flags.py` and the service
+runs normally; that is the local and CI path. Set, GrowthBook can override those
+defaults at runtime without a deploy. Verified against the live service: a flag
+flipped in the dashboard reaches a running process on its own, and a GrowthBook
+outage degrades to the compiled-in defaults rather than failing requests.
+
+Propagation is **not instant** — the SDK holds a cached snapshot and refreshes in
+the background, which is what makes evaluation a ~10µs local lookup rather than a
+network call per request. Budget minutes, not seconds, before relying on a flag
+as an incident control.
+
 `ENVIRONMENT=production` is load-bearing, not a label: it disables `/docs`,
 `/redoc` and `/openapi.json` — which publish the entire admin surface without
 authentication — and makes the app refuse to start authenticating with the
