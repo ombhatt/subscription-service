@@ -1,5 +1,6 @@
 "use client";
 
+import Banner from "@/components/Banner";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
@@ -60,7 +61,12 @@ export default function SuccessPage() {
     };
   }, [userId, ready]);
 
-  if (!ready) return <p className="muted">Loading…</p>;
+  if (!ready)
+    return (
+      <p className="muted" role="status">
+        Loading…
+      </p>
+    );
 
   const granted = ents !== null && ents.tier !== "free";
 
@@ -86,10 +92,10 @@ export default function SuccessPage() {
         </>
       ) : gaveUp ? (
         <>
-          <div className="banner warn">
+          <Banner tone="warn">
             <strong>Still waiting on the webhook.</strong> Stripe has your payment, but this
             service has not been told about it yet, so you are still on Free.
-          </div>
+          </Banner>
           <p className="lede">
             In development this almost always means <code>stripe listen</code> is not running,
             or its <code>whsec_…</code> is not in the API&apos;s <code>.env</code>. The payment

@@ -23,6 +23,7 @@ import {
   formatDateTime,
   formatLimit,
   formatMoney,
+  humanizeKey,
   offerFor,
 } from "./types";
 
@@ -213,6 +214,30 @@ describe("formatLimit", () => {
   it("renders zero as zero, not as unlimited", () => {
     // `limit || "Unlimited"` would be wrong here and is an easy mistake.
     expect(formatLimit(0)).toBe("0");
+  });
+});
+
+describe("humanizeKey", () => {
+  it("turns a quota key into something readable", () => {
+    expect(humanizeKey("messages_per_day")).toBe("Messages per day");
+  });
+
+  it("turns a feature key into something readable", () => {
+    expect(humanizeKey("history_retention_days")).toBe("History retention days");
+  });
+
+  it("leaves a single word alone but capitalised", () => {
+    expect(humanizeKey("models")).toBe("Models");
+  });
+
+  it("never leaves an underscore for a screen reader to announce", () => {
+    // Some readers say "messages underscore per underscore day".
+    expect(humanizeKey("file_uploads_per_day")).not.toContain("_");
+  });
+
+  it("survives an empty key rather than throwing", () => {
+    // A malformed entitlements payload must not take the billing page down.
+    expect(humanizeKey("")).toBe("");
   });
 });
 

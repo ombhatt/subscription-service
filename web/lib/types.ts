@@ -184,6 +184,20 @@ export interface ChatReply {
 
 export const TIER_RANK: Record<Tier, number> = { free: 0, plus: 1, pro: 2 };
 
+/**
+ * `messages_per_day` -> `Messages per day`.
+ *
+ * Derived rather than looked up, so a quota or feature added to plans.py gets a
+ * readable name without a matching edit here -- the same reason nothing else in
+ * this app keeps its own copy of what a tier contains. Raw keys were being
+ * rendered straight to screen, which reads badly and is worse aloud: some
+ * screen readers announce the underscores.
+ */
+export function humanizeKey(key: string): string {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function formatLimit(limit: number | null): string {
   return limit === null ? "Unlimited" : limit.toLocaleString();
 }
