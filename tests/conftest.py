@@ -126,6 +126,8 @@ class FakeStripe:
         self.checkout_sessions: list[dict] = []
         self.portal_sessions: list[dict] = []
         self.next_customer = 0
+        # How many subscriptions list_subscriptions_page returns at a time.
+        self.page_size = 100
 
     # -- fakes for app.stripe_client --------------------------------------
 
@@ -162,7 +164,21 @@ class FakeStripe:
         return session
 
     async def list_subscriptions_page(self, starting_after=None, limit=100):
-        return {"data": list(self.subscriptions.values()), "has_more": False}
+        """Real cursor semantics, so the reconcile job's paging loop is testable.
+
+        Set `stripe.page_size = 1` to force several pages out of a handful of
+        subscriptions. Returning everything in one page (which this used to do)
+        made `has_more` and the `starting_after` hand-off dead code no test
+        could reach.
+        """
+        rows = list(self.subscriptions.values())
+        size = self.page_size or limit
+        start = 0
+        if starting_after is not None:
+            ids = [r["id"] for r in rows]
+            start = ids.index(starting_after) + 1 if starting_after in ids else len(rows)
+        chunk = rows[start : start + size]
+        return {"data": chunk, "has_more": start + size < len(rows)}
 
     async def retrieve_charge(self, charge_id):
         return {"id": charge_id, "customer": None}

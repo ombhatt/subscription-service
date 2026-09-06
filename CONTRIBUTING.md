@@ -22,13 +22,14 @@ something that has gone wrong in a real subscription system.
 
 ## What CI runs
 
-Four jobs, on every PR and every push to `main`:
+Five jobs, on every PR and every push to `main`:
 
 | job | what it proves |
 |---|---|
-| `service (py3.11, py3.12)` | `ruff` is clean and all 116 tests pass, on the declared floor and the next version |
+| `service (py3.11, py3.12)` | `ruff` is clean and all 134 tests pass, on the declared floor and the next version |
 | `migrations on postgres` | the schema applies to a real Postgres 17, rolls back, and applies again |
-| `web` | the production bundle builds, types check, and 30 Playwright specs pass against that bundle |
+| `web` | 30 unit tests run first, then the production bundle builds, types check, and 30 Playwright specs pass against that bundle |
+| `coverage` | **fails the PR if backend coverage drops below 80%**, and if `web/lib` drops below its vitest thresholds |
 | `images` | both images build, the API image migrates a real Postgres and answers both probes, and every log line it writes is JSON |
 
 The migrations job earns its place: the test suite runs on SQLite for speed, so
@@ -43,6 +44,33 @@ The `images` job builds *and runs* the containers rather than only building
 them. "It builds" is a much weaker claim than "it starts, migrates a database
 and answers its own probes" — and since these images cannot be built on a Mac
 without Docker installed, CI is the only place the Dockerfile is ever exercised.
+
+### Coverage
+
+`coverage` is its own job, and therefore its own check, so it can be marked
+**required** in the branch ruleset. Folded into `service` it could only be
+required together with the tests, and a coverage drop would show up in the
+PR's check list looking like a test failure.
+
+It fails the pull request when the backend drops below **80%** (`fail_under`
+in `pyproject.toml`) or `web/lib` drops below its vitest thresholds. Both
+numbers also land in the pull request's job summary, so a change that moves
+them is visible without anyone going looking.
+
+```bash
+make coverage                 # backend: report + the 80% floor
+make coverage-html            # same, browsable at htmlcov/index.html
+cd web && npm run coverage    # web/lib
+```
+
+The floors are floors, not targets — set a little below where the suites
+actually sit, so they catch a real regression without failing every PR that
+adds a branch. Raise them when a number moves up and stays up.
+
+Backend coverage **requires** `concurrency = ["thread", "greenlet"]`, which
+`pyproject.toml` already sets. Without it, coverage cannot see inside
+SQLAlchemy's async bridge and reports most of the request path as unreached
+while its tests pass — a 70% reading against a true 83%.
 
 ### Changing a dependency
 
