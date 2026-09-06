@@ -21,14 +21,14 @@
 # Vercel handles all of this for you and is the easier target for this app;
 # this image exists so the whole stack can be self-hosted.
 
-FROM node:22-slim AS deps
+FROM node:26-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # `npm ci` rather than `npm install`: it installs exactly the lockfile and
 # fails if package.json disagrees, instead of quietly resolving something new.
 RUN npm ci
 
-FROM node:22-slim AS builder
+FROM node:26-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -54,7 +54,7 @@ RUN test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
 
 RUN npm run build
 
-FROM node:22-slim AS runtime
+FROM node:26-slim AS runtime
 WORKDIR /app
 # HOSTNAME is set explicitly because Docker sets it to the container id, and
 # the standalone server reads `process.env.HOSTNAME` as its bind address --
