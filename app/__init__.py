@@ -10,5 +10,5 @@ if sys.version_info < (3, 11):
         f"from {sys.executable}.\n"
         "Recreate the virtualenv with a newer interpreter, for example:\n"
         "    rm -rf .venv && python3.11 -m venv .venv && "
-        ".venv/bin/pip install -r requirements-dev.txt"
+        ".venv/bin/pip install -r requirements.lock -r requirements-dev.txt"
     )

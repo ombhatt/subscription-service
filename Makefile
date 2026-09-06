@@ -24,9 +24,9 @@ services-down:
 install:
 	$(PYTHON) -m venv .venv
 	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r requirements-dev.txt
+	.venv/bin/pip install -r requirements.lock -r requirements-dev.txt
 
-lock:          ## regenerate requirements-lock.txt after editing requirements.txt
+lock:          ## regenerate requirements.lock after editing requirements.txt
 	PYTHON=$(PYTHON) ./scripts/lock.sh
 
 migrate:
@@ -59,9 +59,9 @@ lint:
 # Installs pip-audit into .venv on first use -- about 28 transitive packages,
 # which is why it is not in requirements-dev.txt. CI installs it per-run instead.
 audit:         ## known vulnerabilities in what actually ships
-	@echo "--- python (requirements-lock.txt) ---"
+	@echo "--- python (requirements.lock) ---"
 	@.venv/bin/pip install -q pip-audit 2>/dev/null || true
-	@.venv/bin/pip-audit -r requirements-lock.txt --progress-spinner=off || true
+	@.venv/bin/pip-audit -r requirements.lock --progress-spinner=off || true
 	@echo "--- javascript (web) ---"
 	@cd web && npm audit --audit-level=high || true
 
