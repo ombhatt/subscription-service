@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     log_json: bool = True
     log_level: str = "INFO"
 
+    # --- feature flags ---
+    # Empty means flags are not configured and every read uses the compiled-in
+    # default in app/flags.py. That is the ordinary local and test path, not an
+    # error.
+    growthbook_client_key: str = ""
+    growthbook_api_host: str = "https://cdn.growthbook.io"
+    growthbook_timeout_seconds: float = 3.0
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions"
     redis_url: str | None = "redis://localhost:6379/0"
     admin_api_key: str = "change-me-in-prod"

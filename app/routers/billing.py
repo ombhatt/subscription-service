@@ -10,6 +10,8 @@ from app.auth import CurrentUser, get_current_user
 from app.cache import get_json, set_json
 from app.db import get_session
 from app.errors import BillingError
+from app.flags import is_enabled
+from app.observability import event as log_event
 from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
 from app.schemas import (
     CheckoutRequest,
@@ -91,6 +93,17 @@ async def checkout(
     session: AsyncSession = Depends(get_session),
 ) -> CheckoutResponse:
     """Start a hosted checkout. Grants nothing -- the webhook does that."""
+    # The kill switch. During a Stripe incident the alternative is every
+    # purchase failing somewhere inside their API, at a different point each
+    # time, with a different error. One clear 503 is better for the customer
+    # and much better for whoever is reading the logs.
+    if not await is_enabled("checkout-enabled", user_id=user.id):
+        log_event(log, "checkout.disabled", user_id=user.id, tier=body.tier)
+        raise BillingError(
+            "Checkout is temporarily unavailable. Your plan and access are unaffected.",
+            code=503,
+        )
+
     stripe_session = await start_checkout(
         session,
         user_id=user.id,

@@ -87,6 +87,16 @@ subscription_transitions = Counter(
     registry=REGISTRY,
 )
 
+flag_evaluations = Counter(
+    "feature_flag_evaluations_total",
+    "Feature flag reads, by where the answer came from.",
+    ["flag", "source"],  # remote | default | error | unknown
+    registry=REGISTRY,
+)
+
+# A rising `default` or `error` rate means flags are silently not applying --
+# you flip one and nothing happens. That is the failure this label exists for.
+
 reconciliation_drift = Gauge(
     "reconciliation_drift",
     "Subscriptions that disagreed with Stripe on the last reconciliation run. "
