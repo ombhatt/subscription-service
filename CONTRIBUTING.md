@@ -28,7 +28,7 @@ Five jobs, on every PR and every push to `main`:
 |---|---|
 | `service (py3.11, py3.12)` | `ruff` is clean and all 134 tests pass, on the declared floor and the next version |
 | `migrations on postgres` | the schema applies to a real Postgres 17, rolls back, and applies again |
-| `web` | 30 unit tests run first, then the production bundle builds, types check, and 45 Playwright specs pass against that bundle — including an axe sweep for WCAG A/AA violations on every page |
+| `web` | 35 unit tests run first, then the production bundle builds, types check, and 45 Playwright specs pass against that bundle — including an axe sweep for WCAG A/AA violations on every page |
 | `coverage` | **fails the PR if backend coverage drops below 80%**, and if `web/lib` drops below its vitest thresholds |
 | `images` | both images build, the API image migrates a real Postgres and answers both probes, and every log line it writes is JSON |
 

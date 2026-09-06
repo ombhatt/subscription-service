@@ -314,7 +314,7 @@ scripts/
 
 ```bash
 .venv/bin/pytest -q              # 134, service logic against a Stripe fake
-cd web && npm run test:unit      #  30, pure frontend logic, no browser
+cd web && npm run test:unit      #  35, pure frontend logic, no browser
 cd web && npx playwright test    #  45, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
 ```
