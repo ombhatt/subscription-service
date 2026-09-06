@@ -452,7 +452,7 @@ carries `mismatched` as a field.
 - [x] **Test Clocks** — renewal, dunning, cancel-at-boundary, trial conversion
       and mid-cycle upgrade, against real Stripe objects
 - [x] **Deployable** — one image for the API, the migrations and both jobs;
-      dependencies pinned in `requirements.lock`; CI builds both images and
+      dependencies pinned in `requirements-lock.txt`; CI builds both images and
       smoke-tests them. See [DEPLOY.md](DEPLOY.md).
 - [ ] **Re-enable email confirmation** in Supabase if you disabled it. Without
       it anyone can register an address they do not own, and that address ends

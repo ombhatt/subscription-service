@@ -72,10 +72,44 @@ Backend coverage **requires** `concurrency = ["thread", "greenlet"]`, which
 SQLAlchemy's async bridge and reports most of the request path as unreached
 while its tests pass — a 70% reading against a true 83%.
 
+### Security
+
+Two workflows, answering two different questions.
+
+`Security` (`.github/workflows/security.yml`) asks **is anything we already
+depend on known-vulnerable**. It runs on every pull request *and daily at
+06:20 UTC*, and the daily run is the one that earns its keep: an advisory
+published today applies to versions that have been sitting in `main` for
+weeks, and nobody opens a pull request to tell you that. Three jobs:
+
+| job | what it checks |
+|---|---|
+| `dependency audit` | `pip-audit` against `requirements-lock.txt`, `npm audit` against `web/` |
+| `image scan` | Trivy against the built API image — the OS packages we inherit from the base image, which nothing here pins |
+| `code scanning` | CodeQL over Python and TypeScript; results land in the Security tab |
+
+Dependabot (`.github/dependabot.yml`) is the other half — it keeps things
+current, weekly, grouped so patch bumps arrive as one reviewable pull request
+rather than five rubber-stamped ones. It covers pip, npm, GitHub Actions and
+both Dockerfiles.
+
+The lock is named `requirements-lock.txt`, not `requirements.lock`, for one
+reason: Dependabot only parses files it recognises as requirements files, and
+under the old name the pins that actually ship were invisible to it.
+
+Locally:
+
+```bash
+make audit                    # both ecosystems
+```
+
+Auditing the **lock** rather than `requirements.txt` is deliberate — the latter
+holds floors, which is not what runs anywhere.
+
 ### Changing a dependency
 
 `requirements.txt` holds the direct dependencies and their floors.
-`requirements.lock` holds the full transitive tree at exact versions and is what
+`requirements-lock.txt` holds the full transitive tree at exact versions and is what
 the images and CI actually install.
 
 ```bash

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate requirements.lock from requirements.txt.
+# Regenerate requirements-lock.txt from requirements.txt.
 #
 # Resolves into a throwaway virtualenv rather than freezing the one you develop
 # in: your working venv also holds pytest, ruff and their trees, and a lock
@@ -40,8 +40,8 @@ HEADER
   "$TMP/venv/bin/pip" freeze --exclude-editable \
     | grep -viE '^(pip|setuptools|wheel)==' \
     | sort -f
-} > requirements.lock
+} > requirements-lock.txt
 
-echo "wrote requirements.lock ($(grep -cv '^#\|^$' requirements.lock) pinned packages)"
+echo "wrote requirements-lock.txt ($(grep -cv '^#\|^$' requirements-lock.txt) pinned packages)"
 echo
 echo "next: pip install -r requirements-dev.txt && pytest -q"

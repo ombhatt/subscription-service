@@ -1,0 +1,59 @@
+# Keeps dependencies moving on a schedule rather than only when something
+# breaks. This is the "stay current" half; `security.yml` is the "is anything
+# we already have known-vulnerable" half. Neither replaces the other: an
+# advisory published today applies to the versions already in main, which no
+# amount of updating-on-merge would have caught.
+#
+# Grouped and capped on purpose. Five separate PRs a week for patch bumps is
+# how a team learns to rubber-stamp Dependabot, and a rubber-stamped security
+# update is worse than none.
+
+version: 2
+updates:
+  # The production tree. Dependabot only reads files it recognises as
+  # requirements files, which is why the lock is named requirements-lock.txt
+  # rather than requirements.lock -- under the old name these pins, the ones
+  # that actually ship, were invisible to it.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      python-patch-and-minor:
+        update-types: ["minor", "patch"]
+    labels: ["dependencies", "python"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      js-patch-and-minor:
+        update-types: ["minor", "patch"]
+    labels: ["dependencies", "javascript"]
+
+  # Actions are code that runs with a token against this repo. A stale pinned
+  # action is a supply-chain risk, not a housekeeping item.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ci"]
+
+  # Base images accumulate OS-level CVEs between tag pushes. These are pinned
+  # to a minor tag, so this catches the case where the tag itself moves on.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "docker"]
+
+  - package-ecosystem: docker
+    directory: "/web"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "docker"]

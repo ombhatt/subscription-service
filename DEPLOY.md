@@ -205,7 +205,7 @@ if a later one deletes it.
 ## Dependencies are pinned
 
 `requirements.txt` says which libraries this depends on and the floor for each.
-`requirements.lock` says what actually gets installed, transitive dependencies
+`requirements-lock.txt` says what actually gets installed, transitive dependencies
 included, and is what the image and CI both read — so two builds of the same
 commit install the same code.
 
