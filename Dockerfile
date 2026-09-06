@@ -6,7 +6,7 @@
 # runtime stage receives a finished virtualenv and nothing else.
 
 # ---------------------------------------------------------------- build ----
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # Everything here has a manylinux wheel, so no toolchain is installed on
 # purpose: if a wheel ever goes missing the build fails loudly rather than
@@ -25,7 +25,7 @@ COPY requirements-lock.txt ./
 RUN pip install --no-deps -r requirements-lock.txt && pip check
 
 # -------------------------------------------------------------- runtime ----
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 # Nothing here needs root. Running as one means a container escape starts with
 # uid 0, and it makes read-only-rootfs deployments awkward for no benefit.
