@@ -200,7 +200,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build the API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -258,7 +258,7 @@ jobs:
         run: docker rm -f api || true
 
       - name: Build the web image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./web
           load: true
