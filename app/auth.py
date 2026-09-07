@@ -123,6 +123,30 @@ async def get_current_user(authorization: str | None = Header(default=None)) -> 
     return CurrentUser(id=claims["sub"], email=claims.get("email"))
 
 
+async def get_current_user_optional(
+    authorization: str | None = Header(default=None),
+) -> CurrentUser | None:
+    """Who is calling, if anyone. Never raises.
+
+    For endpoints that must serve anonymous visitors but are more useful when
+    they know who is asking -- the Enterprise inquiry form is the only one
+    today. The pricing page is public, so most inquiries arrive with no token;
+    a signed-in Pro subscriber asking about Enterprise is a materially
+    different lead, and worth attributing.
+
+    A bad token resolves to anonymous rather than 401. That is safe *here*
+    because nothing is granted on the strength of it -- the identity only
+    decorates a record. Never reuse this where the answer authorises anything.
+    """
+    if not authorization:
+        return None
+    try:
+        claims = verify_token(_bearer_token(authorization))
+        return CurrentUser(id=claims["sub"], email=claims.get("email"))
+    except Exception:
+        return None
+
+
 async def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
     """Gate on the admin key, in constant time.
 

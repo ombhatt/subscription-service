@@ -26,6 +26,11 @@ DELIBERATELY_PUBLIC = {
     ("GET", "/v1/billing/plans"),  # the pricing page, before anyone signs up
     ("GET", "/v1/billing/health"),  # config check for deploy pipelines
     ("POST", "/v1/webhooks/stripe"),  # Stripe cannot authenticate; signed instead
+    # Enterprise inquiries: the pricing page is public, and a visitor
+    # evaluating before signing up is the lead worth having. The only
+    # unauthenticated *write* in the service -- see the note in the handler
+    # about what bounds it and what does not.
+    ("POST", "/v1/billing/contact-sales"),
 }
 
 AUTH_DEPENDENCIES = {get_current_user, require_admin}

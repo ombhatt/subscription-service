@@ -87,6 +87,17 @@ subscription_transitions = Counter(
     registry=REGISTRY,
 )
 
+sales_inquiries = Counter(
+    "sales_inquiries_total",
+    "Enterprise contact-sales submissions, by where the click came from.",
+    ["source", "current_tier"],
+    registry=REGISTRY,
+)
+
+# Also the abuse signal. This endpoint is public and unauthenticated by
+# necessity, and there is no rate limiting in this service: a sudden spike here
+# with no matching traffic elsewhere is what a scripted flood looks like.
+
 flag_evaluations = Counter(
     "feature_flag_evaluations_total",
     "Feature flag reads, by where the answer came from.",

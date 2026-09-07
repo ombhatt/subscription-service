@@ -138,9 +138,9 @@ async def test_plans_carry_limits_and_amounts(client, stripe):
     If either had to be duplicated in the frontend, it would eventually lie.
     """
     plans = (await client.get("/v1/billing/plans")).json()
-    assert [p["tier"] for p in plans] == ["free", "plus", "pro"]
+    assert [p["tier"] for p in plans] == ["free", "plus", "pro", "enterprise"]
 
-    free, plus, pro = plans
+    free, plus, pro, enterprise = plans
     assert free["purchasable"] is False
     assert free["prices"] == {}
 
@@ -151,6 +151,12 @@ async def test_plans_carry_limits_and_amounts(client, stripe):
 
     assert any(q["key"] == "messages_per_day" and q["limit"] == 1500 for q in pro["quotas"])
     assert "reasoning" in pro["features"]["models"]
+
+    # Sales-led: it appears on the pricing page, but with no published price and
+    # nothing for a Buy button to point at.
+    assert enterprise["purchasable"] is False
+    assert enterprise["prices"] == {}
+    assert all(q["limit"] is None for q in enterprise["quotas"])
 
 
 async def test_plans_survive_stripe_being_down(client, stripe, monkeypatch):

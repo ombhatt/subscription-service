@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_admin
 from app.db import get_session
-from app.models import EntitlementGrant, Subscription, SubscriptionAudit
+from app.models import EntitlementGrant, SalesInquiry, Subscription, SubscriptionAudit
 from app.plans import Tier
-from app.schemas import AuditEntry, GrantRequest, GrantResponse
+from app.schemas import AuditEntry, GrantRequest, GrantResponse, SalesInquirySummary
 from app.services import audit as audit_service
 from app.services.entitlements import invalidate_entitlements
 from app.services.subscriptions import sync_subscription_from_stripe
@@ -193,3 +193,41 @@ async def revoke_grant(grant_id: str, session: AsyncSession = Depends(get_sessio
         await session.commit()
         await invalidate_entitlements(grant.user_id)
     return {"status": "revoked", "grant_id": grant_id}
+
+
+@router.get("/sales-inquiries", response_model=list[SalesInquirySummary])
+async def sales_inquiries_list(
+    handled: bool | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+) -> list[SalesInquiry]:
+    """The Enterprise lead queue, newest first.
+
+    Behind the admin key with everything else here: these are names, email
+    addresses and stated seat counts of people evaluating the product, which is
+    commercially sensitive and personal data besides.
+
+    `handled=false` is the working view -- what nobody has replied to yet.
+    """
+    stmt = select(SalesInquiry).order_by(SalesInquiry.created_at.desc()).limit(limit)
+    if handled is True:
+        stmt = stmt.where(SalesInquiry.handled_at.is_not(None))
+    elif handled is False:
+        stmt = stmt.where(SalesInquiry.handled_at.is_(None))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+@router.post("/sales-inquiries/{inquiry_id}/handled", response_model=SalesInquirySummary)
+async def mark_inquiry_handled(
+    inquiry_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> SalesInquiry:
+    """Mark a lead as followed up, so the queue means something."""
+    inquiry = await session.get(SalesInquiry, inquiry_id)
+    if inquiry is None:
+        raise HTTPException(status_code=404, detail="no such inquiry")
+    if inquiry.handled_at is None:
+        inquiry.handled_at = datetime.now(UTC)
+        await session.commit()
+    return inquiry

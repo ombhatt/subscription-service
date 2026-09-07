@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 
+import Banner from "@/components/Banner";
+import ContactSales from "@/components/ContactSales";
 import PriceTag from "@/components/PriceTag";
 import { useCallback, useEffect, useState } from "react";
 
@@ -18,6 +20,7 @@ export default function PricingPage() {
   const [interval, setInterval] = useState<Interval>("monthly");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [talkingToSales, setTalkingToSales] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -70,7 +73,12 @@ export default function PricingPage() {
     }
   }, [userId, ready]);
 
-  if (!ready) return <p className="muted">Loading…</p>;
+  if (!ready)
+    return (
+      <p className="muted" role="status">
+        Loading…
+      </p>
+    );
 
   // Null, not "free", when signed out: someone without an account has no
   // current plan, and telling them Free is "their" plan is a small lie that
@@ -88,8 +96,14 @@ export default function PricingPage() {
       </p>
 
       {error && (
-        <div className="banner error">
+        <Banner tone="error">
           <strong>Could not continue.</strong> {error}
+        </Banner>
+      )}
+
+      {talkingToSales && (
+        <div style={{ marginBottom: 20 }}>
+          <ContactSales source="pricing_page" />
         </div>
       )}
 
@@ -124,7 +138,10 @@ export default function PricingPage() {
                 {plan.purchasable ? (
                   <PriceTag offer={offerFor(price, interval)} />
                 ) : (
-                  <span className="price-now">Free</span>
+                  // Both Free and Enterprise are non-purchasable, and they read
+                  // nothing alike. The old branch said "Free" for anything
+                  // without a price, which would have priced Enterprise at zero.
+                  <span className="price-now">{plan.tier === "free" ? "Free" : "Custom"}</span>
                 )}
               </div>
 
@@ -141,7 +158,11 @@ export default function PricingPage() {
                 </li>
                 <li>
                   <span>context</span>
-                  <span>{(plan.features.context_tokens ?? 0).toLocaleString()}</span>
+                  <span>
+                    {plan.features.context_tokens == null
+                      ? "Unlimited"
+                      : plan.features.context_tokens.toLocaleString()}
+                  </span>
                 </li>
                 <li>
                   <span>api access</span>
@@ -156,6 +177,16 @@ export default function PricingPage() {
               <div className="actions">
                 {isCurrent ? (
                   <button disabled>Current plan</button>
+                ) : plan.tier === "enterprise" ? (
+                  // Checked before the subscriber branch on purpose. Stripe's
+                  // portal can only move someone between prices it knows about,
+                  // and Enterprise has none -- so "Change in portal" was both
+                  // wrong and a dead end. An existing paying subscriber is also
+                  // the most valuable Enterprise lead there is, and this branch
+                  // was silently denying them the only way to ask.
+                  <button className="primary" onClick={() => setTalkingToSales(true)}>
+                    Contact sales
+                  </button>
                 ) : subscribed ? (
                   // An existing subscriber changes plan in Stripe's portal, where
                   // proration is handled. A second checkout would create a second

@@ -194,6 +194,30 @@ A cancelled subscription is treated as no subscription at all — Stripe keeps
 returning the dead object, and without that the local state would differ
 depending on how long the provider kept it around.
 
+### Enterprise
+
+A fourth tier that is deliberately unlike the others: no published price, no
+self-serve checkout, and access delivered by a manual grant against a contract
+negotiated out of band. `TierDefinition.purchasable` says so, which is why the
+pricing page renders "Custom" and a **Contact sales** button rather than a
+price and a Buy button.
+
+That flag replaced a rule that read `tier is not Tier.FREE`. It was correct
+right up until a second unpurchasable tier existed, at which point it would
+have quietly let a sales-led plan through checkout — a customer on a plan with
+no price and no contract.
+
+`CATALOG[Tier.ENTERPRISE]` carries no caps at all, and that is a decision worth
+stating: an Enterprise agreement is enforced by a contract, not by this table.
+The moment two Enterprise customers need *different* limits, the answer is
+per-subscription overrides — a different data model — not more rows here, which
+would make the catalog lie about what a tier grants.
+
+Inquiries land in `sales_inquiries` and are worked through
+`GET /v1/admin/sales-inquiries?handled=false`. The `seats` field is the one
+most worth reading: it is the evidence for whether Enterprise eventually means
+"a bigger plan" or "a team product", and the second of those changes the schema.
+
 ### Promotion codes
 
 Codes are created in the Stripe dashboard and redeemed on Stripe's Checkout
@@ -313,9 +337,9 @@ scripts/
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # 153, service logic against a Stripe fake
+.venv/bin/pytest -q              # 170, service logic against a Stripe fake
 cd web && npm run test:unit      #  35, pure frontend logic, no browser
-cd web && npx playwright test    #  45, frontend against a mocked API, incl. axe
+cd web && npx playwright test    #  55, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
 ```
 
@@ -511,7 +535,11 @@ carries `mismatched` as a field.
 - [x] **Accessibility** — banners announce through live regions, quota meters
       expose their values, every control has a name, and axe checks each page
       for WCAG A/AA on every pull request
-- [ ] **Rate limiting.** There is none. General throttling belongs at the edge;
+- [ ] **Rate limiting.** There is none, and `POST /v1/billing/contact-sales` is
+      now the only unauthenticated *write* in the service. The field lengths in
+      `ContactSalesRequest` are the only thing bounding what a script can
+      insert; watch `sales_inquiries_total` and put throttling at the edge
+      before this page gets real traffic. General throttling belongs at the edge;
       the three worth doing in-app are admin auth attempts, checkout creation
       per user, and any public promo-code lookup added later.
 - [ ] **Enable Stripe Tax** and set an origin address, or you are collecting no

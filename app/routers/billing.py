@@ -6,19 +6,24 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
-from app.auth import CurrentUser, get_current_user
+from app.auth import CurrentUser, get_current_user, get_current_user_optional
 from app.cache import get_json, set_json
 from app.db import get_session
 from app.errors import BillingError
 from app.flags import is_enabled
+from app.models import SalesInquiry
 from app.observability import event as log_event
+from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
 from app.schemas import (
     CheckoutRequest,
     CheckoutResponse,
+    ContactSalesRequest,
+    ContactSalesResponse,
     PortalResponse,
     SubscriptionSummary,
 )
+from app.services.entitlements import resolve_entitlements
 from app.services.subscriptions import get_or_create_subscription, open_portal, start_checkout
 
 log = logging.getLogger(__name__)
@@ -59,7 +64,7 @@ async def plans() -> list[dict]:
             {
                 "tier": tier.value,
                 "display_name": definition.display_name,
-                "purchasable": tier is not Tier.FREE,
+                "purchasable": definition.purchasable,
                 "features": definition.features,
                 "quotas": [
                     {"key": q.key, "limit": q.limit, "window": q.window.value}
@@ -169,3 +174,57 @@ async def billing_health() -> dict:
     if missing and len(missing) == 4:
         raise BillingError("no Stripe prices configured; run scripts/seed_stripe.py", code=503)
     return {"status": "ok", "unconfigured_prices": missing}
+
+
+@router.post("/contact-sales", response_model=ContactSalesResponse, status_code=201)
+async def contact_sales(
+    body: ContactSalesRequest,
+    user: CurrentUser | None = Depends(get_current_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ContactSalesResponse:
+    """Record an Enterprise inquiry.
+
+    Deliberately public. The pricing page is unauthenticated, and the leads
+    worth having are often from people evaluating before they sign up --
+    requiring a login here would filter out exactly those.
+
+    That makes this the only unauthenticated write in the service, and there is
+    no rate limiting: the field lengths in ContactSalesRequest are the only
+    thing bounding what a script can insert. `sales_inquiries_total` is the
+    signal to watch, and edge rate limiting is on the list in the README before
+    this takes real traffic.
+
+    Nothing is emailed from here. Recording it durably is the job; who gets
+    notified is a workflow decision, and a background send would be one more
+    thing to fail inside a request the customer is waiting on.
+    """
+    # A signed-in subscriber's current tier is the most useful thing on the
+    # record: someone already paying for Pro who asks about Enterprise is a
+    # different conversation from a visitor browsing the pricing page.
+    current_tier = None
+    if user is not None:
+        current_tier = (await resolve_entitlements(session, user.id))["tier"]
+
+    inquiry = SalesInquiry(
+        user_id=user.id if user else None,
+        email=body.email,
+        company=body.company,
+        seats=body.seats,
+        message=body.message,
+        source=body.source,
+        current_tier=current_tier,
+    )
+    session.add(inquiry)
+    await session.commit()
+
+    sales_inquiries.labels(source=body.source, current_tier=current_tier or "anonymous").inc()
+    log_event(
+        log,
+        "sales.inquiry",
+        inquiry_id=inquiry.id,
+        source=body.source,
+        seats=body.seats,
+        current_tier=current_tier,
+        has_company=bool(body.company),
+    )
+    return ContactSalesResponse(id=inquiry.id)

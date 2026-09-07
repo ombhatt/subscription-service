@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -94,3 +94,40 @@ class AuditEntry(BaseModel):
     from_status: str | None
     to_status: str | None
     stripe_event_id: str | None
+
+
+class ContactSalesRequest(BaseModel):
+    """An Enterprise inquiry.
+
+    Every field is length-bounded. This endpoint is public by necessity -- the
+    pricing page is -- so the request body is attacker-controlled, and an
+    unbounded string here is a way to fill a database for free.
+    """
+
+    # A bounded pattern rather than pydantic's EmailStr, which would pull in
+    # email-validator and dnspython for one field on a lead form. This rejects
+    # the obviously malformed; a human reads these before replying anyway, and
+    # deliverability is not something a regex settles.
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    company: str | None = Field(default=None, max_length=200)
+    seats: int | None = Field(default=None, ge=1, le=1_000_000)
+    message: str | None = Field(default=None, max_length=2000)
+    source: Literal["pricing_page", "paywall", "billing_page"] = "pricing_page"
+
+
+class ContactSalesResponse(BaseModel):
+    id: str
+    status: Literal["received"] = "received"
+
+
+class SalesInquirySummary(BaseModel):
+    id: str
+    user_id: str | None
+    email: str
+    company: str | None
+    seats: int | None
+    message: str | None
+    source: str
+    current_tier: str | None
+    handled_at: datetime | None
+    created_at: datetime

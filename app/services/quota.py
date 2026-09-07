@@ -74,6 +74,13 @@ def upgrade_tier_for(key: str, current: Tier) -> Tier | None:
     for tier in sorted(TIER_RANK, key=lambda t: TIER_RANK[t]):
         if TIER_RANK[tier] <= TIER_RANK[current]:
             continue
+        if not CATALOG[tier].purchasable:
+            # This value drives a *buy* button. Enterprise lifts every cap but
+            # cannot be bought, so offering it here would put a customer one
+            # click from a checkout that refuses them. A Pro subscriber who
+            # runs out is the strongest Enterprise lead there is, but that is a
+            # "contact sales" prompt, not an upgrade target.
+            continue
         quota = CATALOG[tier].quotas.get(key)
         if quota is None:
             continue

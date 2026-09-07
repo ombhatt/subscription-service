@@ -23,7 +23,7 @@ from app.errors import BillingError
 from app.models import PAID_STATUSES, Subscription, SubscriptionStatus
 from app.observability import event as log_event
 from app.observability import subscription_transitions
-from app.plans import BillingInterval, Tier, price_catalog, price_id_for
+from app.plans import CATALOG, BillingInterval, Tier, price_catalog, price_id_for
 from app.services import audit
 from app.services.entitlements import invalidate_entitlements
 
@@ -379,8 +379,12 @@ async def start_checkout(
     promo_code: str | None = None,
 ) -> dict:
     settings = get_settings()
-    if tier is Tier.FREE:
-        raise BillingError("free is not a purchasable tier")
+    # Asks the catalog rather than naming a tier. The old check was
+    # `tier is Tier.FREE`, which was correct until Enterprise existed and would
+    # have quietly let a sales-led tier through self-serve checkout -- landing
+    # a customer on a plan with no price and no contract.
+    if not CATALOG[tier].purchasable:
+        raise BillingError(f"{tier.value} is not a purchasable tier")
 
     price_id = price_id_for(tier, interval)
     if not price_id:
