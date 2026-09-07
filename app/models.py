@@ -162,6 +162,42 @@ class EntitlementGrant(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class SalesInquiry(Base):
+    """Someone asked to be contacted about Enterprise.
+
+    Durable rather than a log line, because this is a work queue: sales has to
+    be able to find who asked, when, and what they wanted. A structured log is
+    queryable but nobody works a shift out of a log aggregator.
+
+    `user_id` is nullable on purpose. The pricing page is public, so the most
+    valuable inquiries -- someone evaluating before they sign up -- arrive with
+    no account attached. Requiring a login here would filter out exactly the
+    leads worth having.
+    """
+
+    __tablename__ = "sales_inquiries"
+    __table_args__ = (Index("ix_sales_inquiry_created", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(200))
+    # What they say they need. The single most useful field on this table: it
+    # is the evidence for whether Enterprise means "bigger caps" or "seats",
+    # which is a schema decision nobody should make on a hunch.
+    seats: Mapped[int | None] = mapped_column(Integer)
+    message: Mapped[str | None] = mapped_column(String(2000))
+    # Where the click came from -- the pricing page, or a paywall a subscriber
+    # hit. A Pro subscriber who ran out of messages is a different lead from a
+    # visitor browsing plans, and the follow-up should differ.
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="pricing_page")
+    current_tier: Mapped[str | None] = mapped_column(String(32))
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SubscriptionAudit(Base):
     """Append-only. Every state transition, and the event that caused it.
 

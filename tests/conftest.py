@@ -45,7 +45,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app import stripe_client
-from app.auth import CurrentUser, get_current_user
+from app.auth import CurrentUser, get_current_user, get_current_user_optional
 from app.cache import InMemoryBackend, set_cache
 from app.db import get_session
 from app.main import app
@@ -100,6 +100,15 @@ async def _current_user_for_tests(x_user_id: str | None = Header(default=None)) 
     return CurrentUser(id=x_user_id, email=f"{x_user_id}@example.test")
 
 
+async def _optional_user_for_tests(
+    x_user_id: str | None = Header(default=None),
+) -> CurrentUser | None:
+    """Same header stub, but anonymous instead of 401 when it is absent."""
+    if not x_user_id:
+        return None
+    return CurrentUser(id=x_user_id, email=f"{x_user_id}@example.test")
+
+
 @pytest_asyncio.fixture
 async def client(sessionmaker_):
     async def override_get_session():
@@ -108,6 +117,9 @@ async def client(sessionmaker_):
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_current_user] = _current_user_for_tests
+    # The optional variant needs its own override, or an endpoint that uses it
+    # sees every test request as anonymous while the header says otherwise.
+    app.dependency_overrides[get_current_user_optional] = _optional_user_for_tests
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

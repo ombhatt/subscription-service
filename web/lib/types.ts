@@ -1,6 +1,6 @@
 /** Mirrors the API's response shapes. Keep in step with app/schemas.py. */
 
-export type Tier = "free" | "plus" | "pro";
+export type Tier = "free" | "plus" | "pro" | "enterprise";
 
 export interface QuotaState {
   key: string;
@@ -18,7 +18,9 @@ export interface Entitlements {
   source: "subscription" | "grant" | "default";
   features: {
     models?: string[];
-    context_tokens?: number;
+    // Null means unlimited, the same as a quota limit. Typed as number only, it
+  // coalesced to 0 on the pricing page and rendered Enterprise as "0 context".
+  context_tokens?: number | null;
     history_retention_days?: number | null;
     api_access?: boolean;
     support_sla?: string;
@@ -182,7 +184,16 @@ export interface ChatReply {
   quota: { key: string; limit: number | null; used: number; remaining: number | null };
 }
 
-export const TIER_RANK: Record<Tier, number> = { free: 0, plus: 1, pro: 2 };
+/** What the Enterprise inquiry form sends. Mirrors ContactSalesRequest. */
+export interface ContactSalesPayload {
+  email: string;
+  company?: string | null;
+  seats?: number | null;
+  message?: string | null;
+  source: "pricing_page" | "paywall" | "billing_page";
+}
+
+export const TIER_RANK: Record<Tier, number> = { free: 0, plus: 1, pro: 2, enterprise: 3 };
 
 /**
  * `messages_per_day` -> `Messages per day`.

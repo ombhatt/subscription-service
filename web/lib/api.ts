@@ -1,5 +1,11 @@
 import { accessToken } from "./supabase";
-import type { ChatReply, Entitlements, Plan, SubscriptionSummary } from "./types";
+import type {
+  ChatReply,
+  ContactSalesPayload,
+  Entitlements,
+  Plan,
+  SubscriptionSummary,
+} from "./types";
 
 /**
  * All calls go through /api, which next.config.mjs rewrites to the FastAPI
@@ -67,6 +73,41 @@ export async function getPlans(): Promise<Plan[]> {
   const response = await fetch("/api/v1/billing/plans", { cache: "no-store" });
   if (!response.ok) throw new ApiError(response.status, null, "could not load plans");
   return response.json();
+}
+
+/**
+ * An Enterprise inquiry. Public like the pricing page it is submitted from --
+ * the leads worth having are often from people who have not signed up yet, so
+ * this deliberately does not go through `request`, which requires a session.
+ *
+ * The token is attached when there happens to be one: a signed-in Pro
+ * subscriber asking about Enterprise is a materially different lead, and the
+ * backend records their tier when it can identify them.
+ */
+export async function contactSales(payload: ContactSalesPayload): Promise<{ id: string }> {
+  const token = await accessToken().catch(() => null);
+  const response = await fetch("/api/v1/billing/contact-sales", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = (body as { detail?: unknown })?.detail;
+    // 422 carries pydantic's field errors, which are useless to a human.
+    const message =
+      response.status === 422
+        ? "Please check the details and try again."
+        : typeof detail === "string"
+          ? detail
+          : "Could not send that just now. Please try again.";
+    throw new ApiError(response.status, body, message);
+  }
+  return body as { id: string };
 }
 
 export function getEntitlements() {

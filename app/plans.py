@@ -22,6 +22,10 @@ class Tier(StrEnum):
     FREE = "free"
     PLUS = "plus"
     PRO = "pro"
+    # Sales-led: no published price and no self-serve checkout. Access is
+    # delivered by a manual grant against a contract negotiated out of band,
+    # which is why it needs no Stripe price ids here.
+    ENTERPRISE = "enterprise"
 
 
 class BillingInterval(StrEnum):
@@ -31,7 +35,7 @@ class BillingInterval(StrEnum):
 
 # Ordering matters: entitlement resolution takes the *highest* tier a user is
 # entitled to (subscription vs. a manual grant), so this must stay ascending.
-TIER_RANK: dict[Tier, int] = {Tier.FREE: 0, Tier.PLUS: 1, Tier.PRO: 2}
+TIER_RANK: dict[Tier, int] = {Tier.FREE: 0, Tier.PLUS: 1, Tier.PRO: 2, Tier.ENTERPRISE: 3}
 
 
 class QuotaWindow(StrEnum):
@@ -59,6 +63,11 @@ class TierDefinition:
     display_name: str
     quotas: dict[str, Quota]
     features: dict[str, object] = field(default_factory=dict)
+    # Whether this tier can be bought through self-serve checkout. Declared
+    # here rather than inferred by the pricing endpoint, which used to compute
+    # it as `tier is not Tier.FREE` -- a rule that silently became wrong the
+    # moment a second non-purchasable tier existed.
+    purchasable: bool = True
 
 
 def _q(key: str, limit: int | None, window: QuotaWindow = QuotaWindow.DAILY) -> Quota:
@@ -69,6 +78,7 @@ CATALOG: dict[Tier, TierDefinition] = {
     Tier.FREE: TierDefinition(
         tier=Tier.FREE,
         display_name="Free",
+        purchasable=False,
         quotas={
             "messages_per_day": _q("messages_per_day", 20),
             "file_uploads_per_day": _q("file_uploads_per_day", 3),
@@ -109,6 +119,27 @@ CATALOG: dict[Tier, TierDefinition] = {
             "history_retention_days": UNLIMITED,
             "api_access": True,
             "support_sla": "8h",
+        },
+    ),
+    Tier.ENTERPRISE: TierDefinition(
+        tier=Tier.ENTERPRISE,
+        display_name="Enterprise",
+        purchasable=False,
+        # No platform caps. Deliberate, and worth stating plainly: an
+        # Enterprise agreement is negotiated in a contract, not enforced by
+        # this table. If per-customer limits ever need enforcing, that is a
+        # per-subscription override and a different data model -- not another
+        # row here, which would make CATALOG lie about what a tier grants.
+        quotas={
+            "messages_per_day": _q("messages_per_day", UNLIMITED),
+            "file_uploads_per_day": _q("file_uploads_per_day", UNLIMITED),
+        },
+        features={
+            "models": ["small", "large", "reasoning"],
+            "context_tokens": UNLIMITED,
+            "history_retention_days": UNLIMITED,
+            "api_access": True,
+            "support_sla": "custom",
         },
     ),
 }

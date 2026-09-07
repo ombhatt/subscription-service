@@ -36,11 +36,35 @@ const FEATURES: Record<Tier, Entitlements["features"]> = {
     api_access: true,
     support_sla: "8h",
   },
+  // Sales-led: no platform caps, because the agreement is a contract rather
+  // than a row in the plan config.
+  enterprise: {
+    models: ["small", "large", "reasoning"],
+    context_tokens: null,
+    history_retention_days: null,
+    api_access: true,
+    support_sla: "custom",
+  },
 };
 
-const MESSAGE_LIMITS: Record<Tier, number | null> = { free: 20, plus: 300, pro: 1500 };
-const UPLOAD_LIMITS: Record<Tier, number | null> = { free: 3, plus: 50, pro: null };
-const DISPLAY: Record<Tier, string> = { free: "Free", plus: "Plus", pro: "Pro" };
+const MESSAGE_LIMITS: Record<Tier, number | null> = {
+  free: 20,
+  plus: 300,
+  pro: 1500,
+  enterprise: null,
+};
+const UPLOAD_LIMITS: Record<Tier, number | null> = {
+  free: 3,
+  plus: 50,
+  pro: null,
+  enterprise: null,
+};
+const DISPLAY: Record<Tier, string> = {
+  free: "Free",
+  plus: "Plus",
+  pro: "Pro",
+  enterprise: "Enterprise",
+};
 
 export interface FakeState {
   tier: Tier;
@@ -140,18 +164,18 @@ export class FakeApi {
   }
 
   plans(): Plan[] {
-    const tiers: Tier[] = ["free", "plus", "pro"];
+    const tiers: Tier[] = ["free", "plus", "pro", "enterprise"];
     return tiers.map((tier) => ({
       tier,
       display_name: DISPLAY[tier],
-      purchasable: tier !== "free",
+      purchasable: tier !== "free" && tier !== "enterprise",
       features: FEATURES[tier],
       quotas: [
         { key: "messages_per_day", limit: MESSAGE_LIMITS[tier], window: "daily" },
         { key: "file_uploads_per_day", limit: UPLOAD_LIMITS[tier], window: "daily" },
       ],
       prices:
-        tier === "free"
+        tier === "free" || tier === "enterprise"
           ? {}
           : {
               monthly: {
