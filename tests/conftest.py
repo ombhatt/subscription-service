@@ -30,6 +30,12 @@ os.environ.update(
         "STRIPE_PRICE_PRO_ANNUAL": "price_pro_y",
         "DUNNING_GRACE_DAYS": "7",
         "ENTITLEMENT_CACHE_TTL": "60",
+        # Explicitly blank so the suite never picks up a real key from a
+        # developer's .env. Without this the flag tests pass in CI, which
+        # has no key, and fail on any machine that has one -- the worst
+        # direction for a test to fail in, because green CI stops meaning
+        # anything. It also kept a real key out of assertion output.
+        "GROWTHBOOK_CLIENT_KEY": "",
     }
 )
 

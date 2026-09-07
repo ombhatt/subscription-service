@@ -101,10 +101,17 @@ async def test_init_never_raises_even_when_everything_is_wrong(monkeypatch):
     assert await flags.is_enabled("checkout-enabled") is True
 
 
-async def test_no_client_key_is_a_normal_state_not_a_failure():
-    """The ordinary local and CI path."""
-    assert flags.get_settings().growthbook_client_key == ""
+async def test_no_client_key_is_a_normal_state_not_a_failure(monkeypatch):
+    """The ordinary local and CI path.
+
+    Sets the key explicitly rather than reading whatever the environment
+    happens to hold: the first version asserted on ambient config, so it passed
+    in CI and failed on any machine with a real key in .env -- and printed that
+    key into the failure output on the way.
+    """
+    monkeypatch.setattr(flags.get_settings(), "growthbook_client_key", "")
     assert await flags.init_flags() is False
+    assert await flags.is_enabled("checkout-enabled") is True
 
 
 # --------------------------------------------------------------------------
