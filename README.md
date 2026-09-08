@@ -535,6 +535,15 @@ carries `mismatched` as a field.
 - [x] **Accessibility** — banners announce through live regions, quota meters
       expose their values, every control has a name, and axe checks each page
       for WCAG A/AA on every pull request
+- [x] **Row-Level Security on every table** — Supabase serves PostgREST over the
+      public anon key, and Alembic's tables landed in `public` with RLS off and
+      full DML granted to `anon`. Measured before the fix: `subscriptions` and
+      `subscription_audit` were readable over the internet with the key from the
+      frontend bundle, and `entitlement_grants` was writable — meaning anyone
+      could grant themselves any tier. Migration `0004` enables RLS with no
+      policies, revokes the grants, and revokes the default privileges so the
+      next table is not born exposed. `tests/test_schema_exposure.py` fails if a
+      new model table is not locked down.
 - [ ] **Rate limiting.** There is none, and `POST /v1/billing/contact-sales` is
       now the only unauthenticated *write* in the service. The field lengths in
       `ContactSalesRequest` are the only thing bounding what a script can
