@@ -170,6 +170,56 @@ the background, which is what makes evaluation a ~10µs local lookup rather than
 network call per request. Budget minutes, not seconds, before relying on a flag
 as an incident control.
 
+### Two database credentials
+
+The running service and the migration step want different powers, and giving
+both the same credential is how a leaked connection string becomes a lost
+project.
+
+```
+DATABASE_URL             the scoped app_service role -- SELECT/INSERT/UPDATE/DELETE
+                         on this service's six tables, and nothing else
+MIGRATION_DATABASE_URL   an admin credential, used only by `alembic upgrade`
+```
+
+Unset, `MIGRATION_DATABASE_URL` falls back to `DATABASE_URL`, which is the
+single-credential setup and what local development uses.
+
+Why it is worth the second variable: measured against this project, Supabase's
+`postgres` role has CREATEROLE, CREATEDB and BYPASSRLS, and can read
+`auth.users` along with `storage` and `vault`. A `DATABASE_URL` leak with that
+role does not expose billing rows, it exposes every account in the project.
+`app_service` reaches `public` and nothing else, and cannot ALTER or DROP
+anything -- so neither a leaked runtime credential nor a SQL injection that
+finds one can destroy the schema.
+
+Migration `0005` creates the role with **no password and no login**, because a
+credential in a migration is a credential in the repository. Finish it by hand,
+once, against your database:
+
+```sql
+ALTER ROLE app_service WITH LOGIN PASSWORD 'a long random secret';
+```
+
+Then point `DATABASE_URL` at it (same host, port and database as before; only
+the user and password change), keep the old admin string as
+`MIGRATION_DATABASE_URL`, and check what you actually got:
+
+```bash
+.venv/bin/python -m scripts.check_db_role
+```
+
+It reports who the credential is, whether it can reach `auth`, `storage` or
+`vault`, and whether it can still do the service's own work -- reads *and* a
+rolled-back write, because grants and RLS can allow SELECT while refusing
+INSERT. Exit code 1 means it is not the scoped setup.
+
+One consequence to keep in mind: RLS is on with no default policies (migration
+`0004`), and `app_service` gets through by an explicit per-table policy from
+`0005`. A table added later without one will be invisible to the service.
+`tests/test_schema_exposure.py` fails in that case, which is where you want to
+find out.
+
 `ENVIRONMENT=production` is load-bearing, not a label: it disables `/docs`,
 `/redoc` and `/openapi.json` — which publish the entire admin surface without
 authentication — and makes the app refuse to start authenticating with the
