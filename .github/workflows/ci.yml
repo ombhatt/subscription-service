@@ -40,7 +40,7 @@ jobs:
         run: pip install -r requirements.lock -r requirements-dev.txt
 
       - name: Lint
-        run: ruff check app tests scripts integration
+        run: ruff check app alembic tests scripts integration
 
       # Coverage lives in its own `coverage` job so it can be required by
       # branch protection on its own name. This job answers "do the tests

@@ -54,7 +54,7 @@ coverage-html: ## same, but browsable -- htmlcov/index.html
 	@echo "open htmlcov/index.html"
 
 lint:
-	.venv/bin/ruff check app tests scripts integration
+	.venv/bin/ruff check app alembic tests scripts integration
 
 # Installs pip-audit into .venv on first use -- about 28 transitive packages,
 # which is why it is not in requirements-dev.txt. CI installs it per-run instead.

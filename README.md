@@ -544,6 +544,13 @@ carries `mismatched` as a field.
       policies, revokes the grants, and revokes the default privileges so the
       next table is not born exposed. `tests/test_schema_exposure.py` fails if a
       new model table is not locked down.
+- [x] **A database credential scoped to this service** — the app connected as
+      Supabase's `postgres`, which carries CREATEROLE, CREATEDB and BYPASSRLS
+      and can read `auth.users`, `storage` and `vault`. Migration `0005` adds
+      `app_service`: DML on this service's six tables, `public` only, no role
+      attributes. Migrations keep an admin credential through
+      `MIGRATION_DATABASE_URL`, so a leaked runtime string cannot ALTER or DROP
+      anything. Verify with `python -m scripts.check_db_role`.
 - [ ] **Rate limiting.** There is none, and `POST /v1/billing/contact-sales` is
       now the only unauthenticated *write* in the service. The field lengths in
       `ContactSalesRequest` are the only thing bounding what a script can

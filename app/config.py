@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     growthbook_timeout_seconds: float = 3.0
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions"
+    # Migrations need to CREATE and ALTER; the running service does not. Point
+    # this at an admin credential and DATABASE_URL at the scoped app role, and
+    # a leaked runtime credential -- or a SQL injection that finds one -- cannot
+    # drop a table. Unset, migrations fall back to DATABASE_URL, which is the
+    # single-credential setup and still what local development uses.
+    migration_database_url: str = ""
+
+    @property
+    def alembic_url(self) -> str:
+        return self.migration_database_url or self.database_url
     redis_url: str | None = "redis://localhost:6379/0"
     admin_api_key: str = "change-me-in-prod"
 

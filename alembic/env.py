@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from alembic import context
 from app.config import get_settings
 from app.db import engine_kwargs
 from app.models import Base
@@ -18,7 +18,13 @@ target_metadata = Base.metadata
 
 
 def _url() -> str:
-    return get_settings().database_url
+    """The credential migrations run as.
+
+    Falls back to DATABASE_URL, so nothing changes for a single-credential
+    setup. Where the two differ, this is the admin one -- the running service
+    connects as a role that cannot ALTER anything.
+    """
+    return get_settings().alembic_url
 
 
 def run_migrations_offline() -> None:
