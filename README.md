@@ -337,7 +337,7 @@ scripts/
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # 170, service logic against a Stripe fake
+.venv/bin/pytest -q              # 181, service logic against a Stripe fake
 cd web && npm run test:unit      #  35, pure frontend logic, no browser
 cd web && npx playwright test    #  55, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
@@ -450,6 +450,26 @@ POST   /v1/admin/grants                       comp a user to a tier
 DELETE /v1/admin/grants/{id}                  revoke
 GET    /v1/webhooks/recent                    webhook health at a glance
 ```
+
+### Mirrored tier vs effective tier
+
+`subscriptions.tier` is a **mirror of Stripe** — what the customer pays for —
+and `_apply_remote` is its only writer. What they may actually *use* is the
+**effective tier**, derived on every read by `resolve_entitlements`, which
+folds in the dunning grace window and any manual grant. See
+[CONTEXT.md](CONTEXT.md).
+
+The distinction matters because a grace window closes through the passage of
+time, not a write: no webhook fires and no row changes, so the mirror cannot
+represent it and any stored answer goes stale with no event to invalidate it.
+The entitlement cache caps its own TTL at the grace boundary for the same
+reason.
+
+Before this was written down, `expire_grace` wrote the mirror to record an
+effective change and `reconcile` — correctly comparing the mirror against
+Stripe — wrote it back, nightly, forever. No customer was affected, but
+`reconciliation_drift` sat permanently above zero, so the alert for missed
+webhooks could never fall silent.
 
 ### Feature flags
 
