@@ -124,6 +124,41 @@ async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any
     }
 
 
+def _ttl_for(data: dict[str, Any]) -> int:
+    """How long this answer stays true.
+
+    Normally the configured TTL. But a subscriber inside a dunning grace window
+    has an expiry date on their access, and crossing it is the passage of time
+    rather than a write -- so no invalidation can ever reach the cached entry.
+    Without this cap they keep paid access for up to the full TTL after the
+    window closes, and nothing in the system knows to stop them.
+
+    Capping at the boundary makes the entry expire exactly when the answer
+    stops being true.
+
+    Returns 0 to mean "do not cache this". Under a second of window left, the
+    floor and the cap fight: a TTL of 1 outlives the boundary, and a TTL of 0
+    means *no expiry* to some backends, which is far worse. Declining to cache
+    is the only answer that is wrong in neither direction, and it applies for
+    at most one second per subscriber per dunning cycle.
+    """
+    ttl = get_settings().entitlement_cache_ttl
+    grace_until = data.get("grace_ends_at")
+    if not grace_until:
+        return ttl
+
+    remaining = (as_utc(datetime.fromisoformat(grace_until)) - datetime.now(UTC)).total_seconds()
+    if remaining <= 0:
+        return ttl  # already past it; the answer is stable again
+    if remaining < 1:
+        return 0
+    # int() truncates, and that direction is deliberate: the entry expires just
+    # *before* the boundary rather than just after it. Rounding would let a
+    # subscriber hold paid access for up to a second past the window on an
+    # entry nothing can invalidate.
+    return min(ttl, int(remaining))
+
+
 async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str, Any]:
     cached = await get_json(_key(user_id))
     if cached is not None:
@@ -144,8 +179,12 @@ async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str,
 
     entitlement_cache.labels(result="miss").inc()
 
-    ttl = get_settings().entitlement_cache_ttl
-    await set_json(_key(user_id), data, ttl)
+    ttl = _ttl_for(data)
+    if ttl > 0:
+        await set_json(_key(user_id), data, ttl)
+    # The stale copy is written regardless: it exists to survive a database
+    # outage, not to answer normally, and the read path only reaches for it
+    # when _resolve_from_db has already failed.
     await set_json(_stale_key(user_id), data, _STALE_TTL)
     return data
 

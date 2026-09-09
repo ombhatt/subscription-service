@@ -17,11 +17,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.jobs.expire_grace import expire_grace_windows
 from app.jobs.reconcile import reconcile
 from app.models import Subscription, SubscriptionAudit, SubscriptionStatus
 from app.plans import Tier
-from app.services.entitlements import resolve_entitlements
+from app.services.entitlements import _ttl_for, resolve_entitlements
 
 
 async def seed(session, **kwargs) -> Subscription:
@@ -171,7 +172,14 @@ def past_due(days_ago: float) -> dict:
     }
 
 
-async def test_a_closed_grace_window_drops_the_subscriber_to_free(session):
+async def test_a_closed_grace_window_revokes_effective_access(session):
+    """What the customer can use, not what the column says.
+
+    This used to assert `sub.tier == free`, which was asserting that the job
+    overwrote the Stripe mirror -- the very thing that made `reconcile` see
+    drift and write it back, nightly, forever. The mirror is Stripe's; what
+    changes here is the effective tier, and that is what the read path serves.
+    """
     # DUNNING_GRACE_DAYS is 7 in the test environment.
     sub = await seed(session, **past_due(days_ago=8))
 
@@ -179,7 +187,8 @@ async def test_a_closed_grace_window_drops_the_subscriber_to_free(session):
 
     assert expired == ["u1"]
     await reload(session, sub)
-    assert sub.tier == Tier.FREE.value
+    assert sub.tier == Tier.PRO.value, "the mirror is Stripe's to write, not this job's"
+    assert (await resolve_entitlements(session, "u1"))["tier"] == Tier.FREE.value
 
 
 async def test_a_grace_window_still_open_is_left_alone(session):
@@ -346,3 +355,95 @@ async def test_expire_grace_main_reports_what_it_revoked(session, monkeypatch, c
 
 async def _noop(*args, **kwargs):
     return None
+
+
+# ==========================================================================
+# the two jobs, together
+# ==========================================================================
+#
+# They were only ever tested apart, and apart they were both correct. Together
+# they undid each other every night: expire_grace wrote `tier = free`, which
+# is the Stripe mirror and not its to write, and reconcile -- correctly
+# comparing that mirror against Stripe -- called it drift and wrote it back.
+# Two audit rows per subscriber per night, and `reconciliation_drift` pinned
+# above zero, so the alarm for missed webhooks could never fall silent.
+
+
+async def test_the_two_nightly_jobs_do_not_undo_each_other(session, stripe):
+    """Three nights. The stored mirror holds, the served tier holds, drift stays
+    at zero, and exactly one audit row is written."""
+    await seed(session, **past_due(days_ago=10))
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="past_due", price_id="price_pro_m")
+
+    for night in range(3):
+        await expire_grace_windows(session)
+        report = await reconcile(session)
+        assert report.mismatched == 0, f"night {night + 1}: the drift alert would be firing"
+
+    row = (await session.execute(
+        select(Subscription).where(Subscription.user_id == "u1"))).scalar_one()
+    await session.refresh(row)
+    assert row.tier == Tier.PRO.value, "the mirror is Stripe's; nothing else may write it"
+    assert (await resolve_entitlements(session, "u1"))["tier"] == Tier.FREE.value
+
+    audits = (await session.execute(select(SubscriptionAudit).where(
+        SubscriptionAudit.reason == "dunning.grace_expired"))).scalars().all()
+    assert len(audits) == 1, f"one event, one row -- got {len(audits)} over three nights"
+
+
+async def test_a_new_dunning_cycle_is_reported_again(session, stripe):
+    """Idempotency keys on `past_due_since`, which is stamped fresh each cycle,
+    so recovering and lapsing again must produce a second row."""
+    sub = await seed(session, **past_due(days_ago=40))
+    assert await expire_grace_windows(session) == ["u1"]
+
+    # Backdate that first report to when it would really have happened -- 33
+    # days ago, seven days after they first lapsed. Without this the test asks
+    # whether a cycle that began *before* its own report gets reported again,
+    # which cannot happen: the report always lands after the lapse it reports.
+    first = (await session.execute(select(SubscriptionAudit))).scalars().one()
+    first.created_at = datetime.now(UTC) - timedelta(days=33)
+    # They pay, recover, and lapse again nine days ago.
+    sub.past_due_since = datetime.now(UTC) - timedelta(days=9)
+    await session.commit()
+
+    assert await expire_grace_windows(session) == ["u1"], "a new cycle is a new event"
+    audits = (await session.execute(select(SubscriptionAudit).where(
+        SubscriptionAudit.reason == "dunning.grace_expired"))).scalars().all()
+    assert len(audits) == 2
+
+
+# ==========================================================================
+# the cache cannot outlive the grace boundary
+# ==========================================================================
+
+
+def _payload(seconds_left: float | None) -> dict:
+    if seconds_left is None:
+        return {"tier": "pro", "grace_ends_at": None}
+    when = datetime.now(UTC) + timedelta(seconds=seconds_left)
+    return {"tier": "pro", "grace_ends_at": when.isoformat()}
+
+
+def test_a_cached_entitlement_never_outlives_the_grace_window():
+    """Crossing the boundary is the passage of time, not a write, so no
+    invalidation can reach the cached entry. The TTL has to do it."""
+    configured = get_settings().entitlement_cache_ttl
+    assert _ttl_for(_payload(None)) == configured, "no window, no cap"
+    assert _ttl_for(_payload(9999)) == configured, "distant window, no cap"
+    for remaining in (5, 30, 59):
+        assert _ttl_for(_payload(remaining)) <= remaining, (
+            f"a {remaining}s window cached for longer would serve paid access past it"
+        )
+
+
+def test_a_sub_second_window_is_not_cached_at_all():
+    """A TTL of 1 outlives the boundary; a TTL of 0 means *never expire* to some
+    backends. Declining to cache is the only answer wrong in neither direction."""
+    assert _ttl_for(_payload(0.5)) == 0
+
+
+def test_a_boundary_already_passed_needs_no_cap():
+    """Past the window the answer is stable again -- free, and staying free."""
+    assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
