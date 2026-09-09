@@ -337,7 +337,7 @@ scripts/
 ## Tests
 
 ```bash
-.venv/bin/pytest -q              # 181, service logic against a Stripe fake
+.venv/bin/pytest -q              # 187, service logic against a Stripe fake
 cd web && npm run test:unit      #  35, pure frontend logic, no browser
 cd web && npx playwright test    #  55, frontend against a mocked API, incl. axe
 make testclock                   #   7, against real Stripe sandbox objects
@@ -450,6 +450,19 @@ POST   /v1/admin/grants                       comp a user to a tier
 DELETE /v1/admin/grants/{id}                  revoke
 GET    /v1/webhooks/recent                    webhook health at a glance
 ```
+
+### Invalidating the entitlement cache
+
+A write that changes what someone may do **marks** them and commits through
+`commit_and_invalidate`; it never clears the cache itself. Clearing before the
+commit lets a concurrent reader repopulate the key from the uncommitted row, so
+the stale answer outlives the write by a full TTL — a customer pays, the webhook
+lands, and they keep seeing their old tier. `WEB_CONCURRENCY=1` is no defence:
+the `await` on the Stripe call is a yield point. See [CONTEXT.md](CONTEXT.md).
+
+`entitlement_invalidations_total{outcome}` reports `ok`, `failed` (the row
+committed but the cache delete did not — someone holds a wrong answer until it
+expires) and `undrained` (a plain `session.commit()` dropped marks).
 
 ### Mirrored tier vs effective tier
 

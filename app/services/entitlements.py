@@ -12,13 +12,14 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.cache import get_cache, get_json, set_json
 from app.config import get_settings
 from app.models import PAID_STATUSES, EntitlementGrant, Subscription
-from app.observability import entitlement_cache
+from app.observability import entitlement_cache, entitlement_invalidations
 from app.plans import CATALOG, TIER_RANK, Tier, higher_tier, limits_for
 from app.policy import grace_ends_at, grace_expired
 from app.timeutil import as_utc
@@ -41,9 +42,106 @@ def _stale_key(user_id: str) -> str:
     return f"ent:{_CACHE_VERSION}:stale:{user_id}"
 
 
+_MARK_KEY = "entitlements_to_invalidate"
+
+
 async def invalidate_entitlements(user_id: str) -> None:
-    """Called by every write that can change what a user may do."""
+    """Drop this user's cached entitlements.
+
+    **Bypasses the ordering guarantee.** Called directly from a write path,
+    before that write commits, it clears the key and a concurrent reader
+    immediately repopulates it from the uncommitted row -- so the stale answer
+    outlives the write by a full TTL. That is a real defect this codebase had,
+    and it is why write paths call `mark_entitlements_stale` and commit through
+    `commit_and_invalidate` instead.
+
+    Kept public for the cases with no write to order against: clearing a cache
+    by hand, and test setup.
+    """
     await get_cache().delete(_key(user_id))
+
+
+def mark_entitlements_stale(session: AsyncSession, user_id: str) -> None:
+    """Register that this transaction changes what `user_id` may do.
+
+    The invalidation happens at `commit_and_invalidate`, not here, so a write
+    path three frames below the commit can register without threading a return
+    value up through every layer -- which is exactly how the old code ended up
+    invalidating from inside the write.
+
+    Nothing happens if the transaction rolls back: the marks live on the
+    session and go with it.
+    """
+    session.sync_session.info.setdefault(_MARK_KEY, set()).add(user_id)
+
+
+async def commit_and_invalidate(session: AsyncSession) -> None:
+    """Commit, then drop the cached entitlements of everyone this touched.
+
+    The order is the whole point, and it is inside here so no caller can get it
+    wrong. Invalidating before the commit leaves a window in which a concurrent
+    reader sees the pre-commit row and caches it; invalidating after leaves no
+    window at all.
+
+    Marks are taken *before* the commit and the set is cleared, so the
+    undrained-marks detector below stays silent on this path and fires only on
+    a plain `session.commit()`.
+
+    A delete that fails is logged and counted, never raised. The row is already
+    durably written; raising here would invite the caller to retry a completed
+    operation, and for a webhook it would make Stripe redeliver an event we
+    have already processed. The cost of swallowing it is one user holding a
+    stale entitlement for up to the TTL, which is strictly better.
+    """
+    user_ids = session.sync_session.info.pop(_MARK_KEY, set())
+    await session.commit()
+
+    for user_id in user_ids:
+        try:
+            await invalidate_entitlements(user_id)
+            entitlement_invalidations.labels(outcome="ok").inc()
+        except Exception:
+            entitlement_invalidations.labels(outcome="failed").inc()
+            log.exception(
+                "committed, but could not invalidate entitlements for %s; "
+                "they hold a stale answer until it expires",
+                user_id,
+            )
+
+
+@event.listens_for(Session, "after_rollback")
+def _discard_marks_on_rollback(session: Session) -> None:
+    """A rolled-back write changes nothing, so it invalidates nothing.
+
+    `session.info` is a plain dict and is *not* transactional -- marks survive
+    a rollback on their own. Without this the webhook failure path, which rolls
+    back and then commits an error record, would invalidate for a write that
+    never happened and trip the undrained detector on every failed webhook.
+    """
+    session.info.pop(_MARK_KEY, None)
+
+
+@event.listens_for(Session, "after_commit")
+def _warn_on_undrained_marks(session: Session) -> None:
+    """Detector for a plain `session.commit()` under a marking write.
+
+    Installed at import time rather than wired from `main.py`'s lifespan,
+    because the cron jobs never run lifespan -- and `expire_grace` is a marking
+    write path by definition, running further from anyone watching than any
+    request does.
+
+    It only logs, so the fact that this callback is synchronous and cannot
+    await the delete does not matter. Curing it here would need a scheduled
+    task that can silently fail, which is the failure mode being removed.
+    """
+    left = session.info.pop(_MARK_KEY, None)
+    if left:
+        entitlement_invalidations.labels(outcome="undrained").inc()
+        log.error(
+            "session.commit() dropped entitlement invalidations for %s -- "
+            "use commit_and_invalidate() instead",
+            sorted(left),
+        )
 
 
 def _iso(value: datetime | None) -> str | None:

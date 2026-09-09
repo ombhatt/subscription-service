@@ -25,7 +25,7 @@ from app.observability import event as log_event
 from app.observability import subscription_transitions
 from app.plans import CATALOG, BillingInterval, Tier, price_catalog, price_id_for
 from app.services import audit
-from app.services.entitlements import invalidate_entitlements
+from app.services.entitlements import mark_entitlements_stale
 
 log = logging.getLogger(__name__)
 
@@ -274,7 +274,11 @@ async def sync_subscription_from_stripe(
 
     await session.flush()
     if _fingerprint(sub) != before_fingerprint:
-        await invalidate_entitlements(sub.user_id)
+        # Marked, not invalidated. This function does not commit -- its caller
+        # does, a frame up -- so clearing the cache here would open a window in
+        # which a concurrent reader repopulates it from the uncommitted row.
+        # The invalidation happens in commit_and_invalidate, after the commit.
+        mark_entitlements_stale(session, sub.user_id)
     return sub
 
 

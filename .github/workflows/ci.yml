@@ -153,7 +153,22 @@ jobs:
 
       - name: Install Chromium system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        # Best-effort, and deliberately cannot fail the job on its own. This
+        # shells out to `apt-get update`, which fails if *any* source on the
+        # runner is broken -- including Google's Chrome repo, which this
+        # project does not use and does not control. That happened: Google
+        # served a Packages.gz whose hash did not match the one their own
+        # Release file declared, and it failed this job twice on a change that
+        # touched no frontend code.
+        #
+        # The runner image already ships Chromium's system libraries, so this
+        # is a safety net rather than a requirement. If the libraries really
+        # are missing, the browsers fail to launch in the step below and that
+        # is where the job should fail -- on a test result, not on a third
+        # party's mirror.
+        run: |
+          npx playwright install-deps chromium \
+            || echo "::warning::playwright install-deps failed; relying on the runner image"
 
       - name: End-to-end tests
         run: npx playwright test

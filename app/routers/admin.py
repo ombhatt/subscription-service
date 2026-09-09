@@ -19,7 +19,7 @@ from app.models import EntitlementGrant, SalesInquiry, Subscription, Subscriptio
 from app.plans import Tier
 from app.schemas import AuditEntry, GrantRequest, GrantResponse, SalesInquirySummary
 from app.services import audit as audit_service
-from app.services.entitlements import invalidate_entitlements
+from app.services.entitlements import commit_and_invalidate, mark_entitlements_stale
 from app.services.subscriptions import sync_subscription_from_stripe
 from app.services.view import entitlement_view
 
@@ -126,8 +126,8 @@ async def extend_grace(
         reason="admin.extend_grace",
         detail={"days": days},
     )
-    await session.commit()
-    await invalidate_entitlements(user_id)
+    mark_entitlements_stale(session, user_id)
+    await commit_and_invalidate(session)
     return {"status": "extended", "past_due_since": sub.past_due_since}
 
 
@@ -162,8 +162,8 @@ async def create_grant(
         reason="admin.grant_created",
         detail={"grant_id": grant.id, "expires_at": str(body.expires_at)},
     )
-    await session.commit()
-    await invalidate_entitlements(body.user_id)
+    mark_entitlements_stale(session, body.user_id)
+    await commit_and_invalidate(session)
     return GrantResponse(
         id=grant.id,
         user_id=grant.user_id,
@@ -190,8 +190,8 @@ async def revoke_grant(grant_id: str, session: AsyncSession = Depends(get_sessio
             reason="admin.grant_revoked",
             detail={"grant_id": grant.id},
         )
-        await session.commit()
-        await invalidate_entitlements(grant.user_id)
+        mark_entitlements_stale(session, grant.user_id)
+        await commit_and_invalidate(session)
     return {"status": "revoked", "grant_id": grant_id}
 
 
