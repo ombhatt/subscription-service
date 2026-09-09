@@ -42,7 +42,7 @@ from app.observability import event as log_event
 from app.plans import Tier
 from app.policy import grace_expired
 from app.services import audit
-from app.services.entitlements import invalidate_entitlements
+from app.services.entitlements import commit_and_invalidate, mark_entitlements_stale
 
 log = logging.getLogger(__name__)
 
@@ -113,13 +113,13 @@ async def expire_grace_windows(session: AsyncSession) -> list[str]:
         expired.append(sub.user_id)
 
     if expired:
-        await session.commit()
         # Redundant for entries written after the TTL cap shipped -- those
-        # cannot outlive the boundary. Kept for the ones cached before it, and
-        # because an unnecessary DELETE is cheaper than a subscriber holding
-        # paid access on a stale key.
+        # cannot outlive the grace boundary. Kept for the ones cached before
+        # it, and because an unnecessary DELETE is cheaper than a subscriber
+        # holding paid access on a stale key.
         for user_id in expired:
-            await invalidate_entitlements(user_id)
+            mark_entitlements_stale(session, user_id)
+        await commit_and_invalidate(session)
     return expired
 
 

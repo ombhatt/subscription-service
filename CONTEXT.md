@@ -55,3 +55,36 @@ paying customers' rates because a nightly job has not fired yet. The job exists
 for the audit trail — support needs to answer *"why did I lose access last
 night"* — and its audit row records the **effective** transition, not a change
 to the mirror.
+
+## Marking, and commit-and-invalidate
+
+A write that changes what someone may do **marks** them
+(`mark_entitlements_stale`) and commits through `commit_and_invalidate`. It
+does not clear the cache itself.
+
+The ordering is the reason. Clearing the cache before the transaction commits
+opens a window in which a concurrent reader sees the pre-commit row and caches
+it — so the stale answer *outlives* the write by a full TTL. Measured against
+real Postgres and Redis, in a single process with one event loop:
+
+    writer: sync() done — flushed and invalidated, NOT committed
+    reader: resolved tier='free' and cached it for 60s
+    writer: COMMIT
+            database says pro, the API serves free
+
+A customer paid, the webhook landed, and they sat on free for the next minute —
+inside the window that "access is granted on the webhook, never on the
+redirect" exists to protect. `WEB_CONCURRENCY=1` is no defence: the `await` on
+the Stripe call inside `sync` is a yield point.
+
+Marks live on `session.info`, so a write path several frames below the commit
+can register without threading a return value up through every layer — which is
+how the old code ended up reaching for the cache from inside the write.
+`session.info` is not transactional, so an `after_rollback` listener discards
+them; a rolled-back write changes nothing and invalidates nothing.
+
+A plain `session.commit()` under a marking write drops the marks silently. An
+`after_commit` listener logs that and counts it as
+`entitlement_invalidations_total{outcome="undrained"}`. It only detects — curing
+it there would need a scheduled task that can fail quietly, which is the failure
+being removed.

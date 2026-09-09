@@ -73,6 +73,22 @@ entitlement_cache = Counter(
     registry=REGISTRY,
 )
 
+entitlement_invalidations = Counter(
+    "entitlement_invalidations_total",
+    "Entitlement cache invalidations, by what happened to them.",
+    ["outcome"],  # ok | failed | undrained
+    registry=REGISTRY,
+)
+
+# Separate from entitlement_cache{result}, which counts *reads* -- and whose
+# `stale` value the README documents as an outage signal. Folding writes into
+# it would break that reading.
+#
+# `failed` means the row committed but the cache delete did not, so someone is
+# holding an entitlement that is already wrong. `undrained` means a plain
+# session.commit() ran under a write that had marked users, and the marks were
+# silently dropped -- the trap this whole mechanism exists to close.
+
 quota_rejections = Counter(
     "quota_rejections_total",
     "Requests refused because a quota was exhausted.",

@@ -34,6 +34,7 @@ from app.observability import (
 from app.observability import (
     event as log_event,
 )
+from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import mark_disputed, sync_subscription_from_stripe
 
 log = logging.getLogger(__name__)
@@ -88,7 +89,10 @@ async def stripe_webhook(
         with timer:
             handled = await _handle(session, event)
             await _mark(session, event_id, "processed")
-            await session.commit()
+            # Drains the marks `sync_subscription_from_stripe` left, after the
+            # commit rather than before it. This is the hot path -- every
+            # webhook -- and the one the ordering defect lived on.
+            await commit_and_invalidate(session)
     except Exception:
         await session.rollback()
         await _mark(session, event_id, "failed", error=_short_error())
