@@ -4,9 +4,9 @@ The suite deletes its own clock in a fixture teardown, but a cancelled or
 timed-out CI job kills the process before that runs, and each orphan holds
 customers and subscriptions until Stripe expires it 30 days later.
 
-Scoped by name prefix on purpose. The nightly workflow shares a sandbox with
-whatever simulations you have open in the Dashboard, so a blind "delete all
-clocks" would quietly destroy work in progress.
+Scoped by name prefix on purpose. CI -- the nightly and pull request runs --
+shares a sandbox with whatever simulations you have open in the Dashboard, so
+a blind "delete all clocks" would quietly destroy work in progress.
 
     python -m scripts.cleanup_test_clocks --prefix ci- --older-than 60
     python -m scripts.cleanup_test_clocks --prefix ci- --dry-run
