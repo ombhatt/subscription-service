@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import func, select
 
 from app.errors import QuotaExceeded
-from app.models import Subscription
+from app.models import SalesInquiry, Subscription
 from app.plans import Tier
 from app.services import quota
 from app.services.entitlements import resolve_entitlements
@@ -89,6 +90,59 @@ async def test_free_users_fall_back_to_the_calendar_month(session):
     assert start.day == 1
     assert end.day == 1
     assert end > start
+
+
+# --------------------------------------------------------------------------
+# The mirror writes in its own transaction, never in the caller's.
+#
+# `consume` used to commit the request session -- and roll it back when the
+# mirror hit trouble -- so whatever the caller had pending was saved early or
+# thrown away, depending on how the mirror fared. Harmless only while the one
+# metered endpoint had nothing pending when it consumed.
+# --------------------------------------------------------------------------
+
+
+async def _count(sessionmaker_, model) -> int:
+    async with sessionmaker_() as fresh:
+        return (await fresh.execute(select(func.count()).select_from(model))).scalar_one()
+
+
+async def test_consume_never_commits_the_callers_work(session, sessionmaker_):
+    """The caller decides whether its work lands. The usage record lands either
+    way, because Redis has already counted the request and nothing refunds it."""
+    ents = await entitlements_for(session, "q7", "free")
+
+    session.add(SalesInquiry(email="half-done@example.test", source="test"))
+    await quota.consume(session, user_id="q7", key="messages_per_day", entitlements=ents)
+    await session.rollback()  # the caller abandons its own work
+
+    assert await _count(sessionmaker_, SalesInquiry) == 0, (
+        "consume committed a write that belonged to its caller"
+    )
+    async with sessionmaker_() as fresh:
+        rows = await quota.counter_rows(fresh, "q7")
+    assert [row.count for row in rows] == [1], "the mirror must not depend on the caller's commit"
+
+
+async def test_a_mirror_failure_leaves_the_callers_work_alone(session, sessionmaker_, monkeypatch):
+    """The mirror is best-effort and swallows its own failures. It used to do
+    that by rolling back the caller's session, discarding whatever the caller
+    had pending."""
+    ents = await entitlements_for(session, "q8", "free")
+
+    def broken_update(*args, **kwargs):
+        raise RuntimeError("usage mirror unavailable")
+
+    monkeypatch.setattr(quota, "update", broken_update)
+
+    session.add(SalesInquiry(email="keep-me@example.test", source="test"))
+    state = await quota.consume(session, user_id="q8", key="messages_per_day", entitlements=ents)
+    assert state["used"] == 1, "enforcement must not depend on the mirror"
+
+    await session.commit()  # the caller finishes its own work
+    assert await _count(sessionmaker_, SalesInquiry) == 1, (
+        "a mirror failure discarded a write that belonged to its caller"
+    )
 
 
 def test_upgrade_target_is_the_cheapest_tier_that_helps():
