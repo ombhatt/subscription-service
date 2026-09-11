@@ -425,7 +425,7 @@ docker compose --profile full up --build   # the whole stack, the way it deploys
 Two cron entries, both the same image:
 
 ```bash
-python -m app.jobs.reconcile      # nightly; alert on mismatched > 0
+python -m app.jobs.reconcile      # nightly; alert on mismatched > 0 or exit 1
 python -m app.jobs.expire_grace   # nightly; closes dunning grace windows
 ```
 
