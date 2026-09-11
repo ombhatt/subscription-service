@@ -6,8 +6,10 @@ the opposite: real Stripe API, real objects, real API version. It exists to
 catch the class of bug the fake cannot -- where our reading of Stripe's data is
 wrong rather than our logic.
 
-Requires a sandbox key in `.env` and network access, so it never runs in CI and
-is excluded from `pytest` by default (`testpaths = ["tests"]`).
+Requires a sandbox key (from `.env`, or the environment in CI) and network
+access, so it is excluded from `pytest` by default (`testpaths = ["tests"]`)
+and runs from its own workflow, `.github/workflows/stripe-sandbox.yml`: nightly,
+and on pull requests that touch the service.
 
     make testclock          # or: .venv/bin/pytest integration/ -v
 """
@@ -34,8 +36,9 @@ from app.models import Base
 from app.stripe_client import _as_dict
 
 # Prefixed onto every clock this suite creates. CI sets it so the cleanup step
-# can delete only what CI made -- the nightly run shares a sandbox with whatever
-# simulations you have open in the Dashboard, and must not touch those.
+# can delete only what CI made -- nightly and pull request runs share a sandbox
+# with whatever simulations you have open in the Dashboard, and must not touch
+# those.
 CLOCK_PREFIX = os.environ.get("TEST_CLOCK_PREFIX", "")
 
 # How long to wait for an advance to finish before giving up.

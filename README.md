@@ -398,10 +398,17 @@ and asserts what `sync_subscription_from_stripe` writes — catching the class o
 bug the fake structurally cannot, where our *reading* of Stripe is wrong rather
 than our logic. It found one immediately.
 
-Two things it cannot do, by construction. It **never runs on pull requests** —
-it needs a sandbox key and network, so it runs nightly instead
-([`nightly.yml`](.github/workflows/nightly.yml)) and on demand via
-`make testclock`. And **a test clock moves Stripe's time, not ours**:
+It runs **on pull requests that touch the service**
+([`integration.yml`](.github/workflows/integration.yml)), **nightly** against
+`main` ([`nightly.yml`](.github/workflows/nightly.yml)), and on demand via
+`make testclock`. Both workflows call one definition,
+[`stripe-sandbox.yml`](.github/workflows/stripe-sandbox.yml). It used to run
+nightly only, which is how #41 broke it and still merged green. Dependabot and
+fork pull requests receive no repository secrets, so there it skips with a
+notice instead of failing; the nightly still covers them after merge.
+
+One thing it cannot do, by construction: **a test clock moves Stripe's time,
+not ours**:
 `past_due_since` is stamped with real wall-clock time, so advancing a simulation
 will never age our grace window.
 

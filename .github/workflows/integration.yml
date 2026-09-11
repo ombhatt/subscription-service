@@ -1,0 +1,48 @@
+name: Integration
+
+# The Stripe sandbox suite (integration/) on pull requests that could change its
+# outcome. Until this existed only the nightly ran it, so a pull request could
+# break it and still merge green -- #41 did exactly that, and the nightly was red
+# for two days before anyone looked.
+#
+# Path-filtered: a frontend- or docs-only change cannot affect how we read
+# Stripe, and every run creates real sandbox objects and takes a couple of
+# minutes. Deliberately not a required check in the branch ruleset for the same
+# reason: a required check that the path filter never starts leaves those pull
+# requests waiting on it forever.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "integration/**"
+      - "scripts/cleanup_test_clocks.py"
+      - "requirements.lock"
+      - "requirements-dev.txt"
+      - "pyproject.toml"
+      - ".github/workflows/integration.yml"
+      - ".github/workflows/stripe-sandbox.yml"
+
+permissions:
+  contents: read
+
+# Per pull request, and never cancelled in flight: a newer push queues behind the
+# running one instead of killing it mid-simulation, which would skip the fixture
+# teardown and orphan a test clock. Separate from the nightly's group on purpose:
+# a single shared group would let one queued run silently displace another pull
+# request's, or the nightly's. Overlap is safe -- every test creates and deletes
+# its own clock, and cleanup never touches a clock under an hour old.
+concurrency:
+  group: integration-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    uses: ./.github/workflows/stripe-sandbox.yml
+    with:
+      # Dependabot and fork pull requests receive no repository secrets. Skip
+      # those with a notice instead of failing every dependency bump. A pull
+      # request from this repository with no key is a misconfiguration, and
+      # still fails.
+      missing-key: ${{ (github.event.pull_request.head.repo.fork || github.event.pull_request.user.login == 'dependabot[bot]') && 'skip' || 'fail' }}
+    secrets: inherit
