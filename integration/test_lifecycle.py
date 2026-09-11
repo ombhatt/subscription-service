@@ -14,10 +14,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from app.jobs.expire_grace import expire_grace_windows
-from app.models import SubscriptionStatus
+from sqlalchemy import select
+
+from app.jobs.expire_grace import REASON, expire_grace_windows
+from app.models import SubscriptionAudit, SubscriptionStatus
 from app.policy import grace_ends_at, grace_expired
-from app.services.entitlements import resolve_entitlements
+from app.services.entitlements import commit_and_invalidate, resolve_entitlements
 from app.services.subscriptions import get_subscription, sync_subscription_from_stripe
 
 
@@ -27,7 +29,10 @@ def a_user(prefix: str) -> str:
 
 async def sync(session, customer_id: str):
     sub = await sync_subscription_from_stripe(session, stripe_customer_id=customer_id)
-    await session.commit()
+    # How every production caller commits a sync. A plain commit drops the
+    # cache invalidation the sync registered and logs an error saying so --
+    # noise that sat next to a real failure in the nightly log.
+    await commit_and_invalidate(session)
     return sub
 
 
@@ -124,10 +129,31 @@ async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, 
     ents = await resolve_entitlements(session, user_id)
     assert ents["tier"] == "free"
 
-    # And the job makes it durable.
+    # And the job records it -- without touching the mirror. Stripe still says
+    # Pro, because Stripe is still retrying the card, and `subscriptions.tier`
+    # mirrors Stripe. When this job wrote `free` there, reconcile saw drift and
+    # wrote it back every night. See CONTEXT.md, "mirrored tier".
     expired = await expire_grace_windows(session)
     assert user_id in expired
-    assert (await get_subscription(session, user_id)).tier == "free"
+    assert (await get_subscription(session, user_id)).tier == "pro", (
+        "the mirrored tier follows Stripe; the effective tier is the read path's job"
+    )
+
+    reported = (
+        (
+            await session.execute(
+                select(SubscriptionAudit).where(
+                    SubscriptionAudit.user_id == user_id, SubscriptionAudit.reason == REASON
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [row.to_tier for row in reported] == ["free"], "one audit row, for the effective tier"
+
+    # A nightly job runs again tomorrow; the same dunning cycle is not news.
+    assert await expire_grace_windows(session) == []
 
 
 async def test_cancelling_keeps_access_until_the_boundary(session, clock, prices):
