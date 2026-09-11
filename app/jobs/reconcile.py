@@ -23,6 +23,7 @@ from app.db import dispose_engine, get_sessionmaker
 from app.models import PAID_STATUSES, Subscription
 from app.observability import configure_logging, reconciliation_drift
 from app.observability import event as log_event
+from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import STATUS_MAP, resolve_tier, sync_subscription_from_stripe
 
 log = logging.getLogger(__name__)
@@ -119,7 +120,9 @@ async def reconcile(session: AsyncSession, *, dry_run: bool = False) -> Reconcil
         starting_after = rows[-1]["id"]
 
     if not dry_run:
-        await session.commit()
+        # Every repair above marked its user stale; a plain commit dropped those
+        # marks, so a repaired customer kept their cached tier until it expired.
+        await commit_and_invalidate(session)
     return report
 
 

@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import logging
 
+import pytest
 from sqlalchemy import select
 
+from app.jobs.reconcile import reconcile
 from app.models import Subscription
 from app.observability import entitlement_invalidations
 from app.services.entitlements import (
@@ -33,6 +35,7 @@ from app.services.entitlements import (
 from app.services.subscriptions import sync_subscription_from_stripe
 
 USER = "alice"
+ADMIN = {"X-Admin-Key": "test-admin-key"}
 
 
 def counter(outcome: str) -> float:
@@ -116,6 +119,7 @@ async def test_a_rolled_back_write_invalidates_nothing(sessionmaker_, stripe):
         )
 
 
+@pytest.mark.allow_undrained
 async def test_a_plain_commit_under_a_marking_write_is_reported(
     sessionmaker_, stripe, caplog
 ):
@@ -170,3 +174,54 @@ async def test_a_cache_failure_after_commit_does_not_lose_the_write(
         row = (await check.execute(
             select(Subscription).where(Subscription.user_id == USER))).scalar_one_or_none()
         assert row is not None, "the write must survive a cache failure"
+
+
+# --------------------------------------------------------------------------
+# The two write paths #42 missed. Both are repairs for a webhook that never
+# arrived, so both run exactly when a customer is already on the wrong tier --
+# and both used to fix the row while the API went on serving the old answer.
+# --------------------------------------------------------------------------
+
+
+async def _paid_but_cached_as_free(sessionmaker_, stripe) -> None:
+    """A customer paid, the webhook was lost, and their free tier is cached."""
+    async with sessionmaker_() as setup:
+        setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
+        await setup.commit()
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
+
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER))["tier"] == "free"
+
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+
+
+async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker_, stripe):
+    """Support's fix for a missed webhook. The response said "resynced" and
+    `tier: pro` while the customer went on seeing free until the entry expired
+    -- so the fix looked like it had not worked, at exactly the moment someone
+    was watching."""
+    await _paid_but_cached_as_free(sessionmaker_, stripe)
+
+    response = await client.post(f"/v1/admin/users/{USER}/resync", headers=ADMIN)
+    assert response.status_code == 200
+    assert response.json()["tier"] == "pro"
+
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER))["tier"] == "pro", (
+            "the resync repaired the row but the API still serves the cached tier"
+        )
+
+
+async def test_a_reconcile_repair_invalidates_after_its_commit(sessionmaker_, stripe):
+    """The nightly safety net for missed webhooks, with the same gap."""
+    await _paid_but_cached_as_free(sessionmaker_, stripe)
+
+    async with sessionmaker_() as job:
+        report = await reconcile(job)
+    assert report.repaired == 1
+
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER))["tier"] == "pro", (
+            "reconcile repaired the row but the API still serves the cached tier"
+        )
