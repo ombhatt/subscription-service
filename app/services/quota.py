@@ -18,7 +18,7 @@ from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.cache import get_cache
 from app.errors import QuotaExceeded
@@ -126,6 +126,10 @@ async def consume(
 
     Increment-then-check: the counter may read one above the limit for a
     rejected request, which is correct -- it records the attempt.
+
+    Never commits, rolls back or flushes `session`. The caller owns its
+    transaction; `session` is used only to find the database, and the durable
+    mirror is written in a transaction of its own (see `_mirror`).
     """
     found = quota_limit(entitlements, key)
     if found is None:
@@ -148,7 +152,7 @@ async def consume(
             upgrade_tier=(t.value if (t := upgrade_tier_for(key, current)) else None),
         )
 
-    await _mirror(session, user_id=user_id, key=key, start=start, end=end)
+    await _mirror(session.bind, user_id=user_id, key=key, start=start, end=end)
     return {
         "key": key,
         "limit": limit,
@@ -159,12 +163,27 @@ async def consume(
 
 
 async def _mirror(
-    session: AsyncSession, *, user_id: str, key: str, start: datetime, end: datetime
+    engine: AsyncEngine, *, user_id: str, key: str, start: datetime, end: datetime
 ) -> None:
-    """Durable copy of the counter. Never blocks enforcement: a failure here is
-    logged and swallowed, because Redis already made the decision."""
+    """Durable copy of the counter, in its own short transaction.
+
+    Never blocks enforcement: a failure here is logged and swallowed, because
+    Redis already made the decision.
+
+    Not the caller's session. This used to commit the request session, saving
+    whatever the endpoint had pending before the endpoint had decided to, and
+    to roll it back on a mirror failure, throwing that work away. The mirror
+    should not follow the caller's outcome in any case: Redis counted this
+    request when it was made and nothing refunds it, so the durable copy
+    records the same fact whether or not the endpoint's own work lands.
+
+    The cost is a second pooled connection for one UPDATE (or INSERT) and its
+    commit, and only while the request session is holding one as well.
+    """
     try:
-        result = await session.execute(
+        # Inside the try with everything else: nothing about the mirror may
+        # escape to the endpoint.
+        increment = (
             update(UsageCounter)
             .where(
                 UsageCounter.user_id == user_id,
@@ -173,31 +192,24 @@ async def _mirror(
             )
             .values(count=UsageCounter.count + 1)
         )
-        if result.rowcount == 0:
-            session.add(
-                UsageCounter(
-                    user_id=user_id, key=key, window_start=start, window_end=end, count=1
-                )
-            )
-            try:
-                await session.flush()
-            except IntegrityError:
-                # Another worker created the row between the update and the
-                # insert; the update now finds it.
-                await session.rollback()
-                await session.execute(
-                    update(UsageCounter)
-                    .where(
-                        UsageCounter.user_id == user_id,
-                        UsageCounter.key == key,
-                        UsageCounter.window_start == start,
+        async with AsyncSession(engine, expire_on_commit=False) as own:
+            result = await own.execute(increment)
+            if result.rowcount == 0:
+                own.add(
+                    UsageCounter(
+                        user_id=user_id, key=key, window_start=start, window_end=end, count=1
                     )
-                    .values(count=UsageCounter.count + 1)
                 )
-        await session.commit()
+                try:
+                    await own.flush()
+                except IntegrityError:
+                    # Another worker created the row between the update and the
+                    # insert; the update now finds it.
+                    await own.rollback()
+                    await own.execute(increment)
+            await own.commit()
     except Exception:
         log.exception("usage mirror failed for %s/%s", user_id, key)
-        await session.rollback()
 
 
 async def counter_rows(session: AsyncSession, user_id: str) -> list[UsageCounter]:
