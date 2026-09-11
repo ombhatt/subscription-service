@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app import stripe_client
 from app.config import get_settings
 from app.jobs.expire_grace import expire_grace_windows
 from app.jobs.reconcile import reconcile
@@ -148,6 +149,77 @@ async def test_every_page_is_walked(session, stripe):
     assert report.mismatched == 5
 
 
+async def test_one_customer_failing_does_not_undo_the_others(
+    session, sessionmaker_, stripe, monkeypatch
+):
+    """Stripe errors for one customer mid-run. Every other repair must still land.
+
+    The job used to be one transaction: a single exception rolled back every
+    repair made before it, and nothing after it ran at all -- so one bad
+    customer meant nobody's drift was fixed that night.
+    """
+    for n in ("a", "b", "c"):
+        await seed(session, user_id=f"u{n}", stripe_customer_id=f"cus_{n}")
+        stripe.customers[f"cus_{n}"] = {"id": f"cus_{n}", "metadata": {"user_id": f"u{n}"}}
+        stripe.set_subscription(f"cus_{n}", status="active", price_id="price_pro_m",
+                                subscription_id=f"sub_{n}")
+
+    async def flaky(customer_id):
+        if customer_id == "cus_b":
+            raise ConnectionError("stripe timed out for this one customer")
+        return stripe.subscriptions.get(customer_id)
+
+    monkeypatch.setattr(stripe_client, "fetch_current_subscription", flaky)
+
+    report = await reconcile(session)
+
+    assert report.mismatched == 3
+    assert report.repaired == 2
+    assert report.failed == ["cus_b"]
+    async with sessionmaker_() as fresh:
+        rows = await fresh.execute(select(Subscription.stripe_customer_id, Subscription.tier))
+        assert dict(rows.all()) == {"cus_a": "pro", "cus_b": "free", "cus_c": "pro"}
+
+
+async def test_each_repair_commits_before_the_next_customer_is_fetched(
+    session, stripe, monkeypatch
+):
+    """The commit is what releases the row lock.
+
+    `sync` takes `SELECT ... FOR UPDATE` and holds it until the transaction
+    ends. With one transaction for the whole run, every repaired row stayed
+    locked across every later Stripe call, and webhooks for those customers
+    waited on it until their lock timeout. SQLite has no row locks to observe,
+    so this asserts the order that releases them.
+    """
+    from app.jobs import reconcile as job
+
+    for n in ("a", "b"):
+        await seed(session, user_id=f"u{n}", stripe_customer_id=f"cus_{n}")
+        stripe.customers[f"cus_{n}"] = {"id": f"cus_{n}", "metadata": {"user_id": f"u{n}"}}
+        stripe.set_subscription(f"cus_{n}", status="active", price_id="price_pro_m",
+                                subscription_id=f"sub_{n}")
+
+    events: list[str] = []
+    real_fetch = stripe_client.fetch_current_subscription
+    real_commit = job.commit_and_invalidate
+
+    async def watched_fetch(customer_id):
+        events.append(f"fetch {customer_id}")
+        return await real_fetch(customer_id)
+
+    async def watched_commit(session_):
+        events.append("commit")
+        await real_commit(session_)
+
+    monkeypatch.setattr(stripe_client, "fetch_current_subscription", watched_fetch)
+    monkeypatch.setattr(job, "commit_and_invalidate", watched_commit)
+
+    await reconcile(session)
+
+    assert events == ["fetch cus_a", "commit", "fetch cus_b", "commit"]
+
+
 async def test_the_report_carries_what_the_alert_needs(session, stripe):
     await seed(session, tier=Tier.FREE.value)
     stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
@@ -155,7 +227,9 @@ async def test_the_report_carries_what_the_alert_needs(session, stripe):
 
     payload = (await reconcile(session, dry_run=True)).as_dict()
 
-    assert set(payload) == {"checked", "mismatched", "repaired", "unknown_customers", "details"}
+    assert set(payload) == {
+        "checked", "mismatched", "repaired", "failed", "unknown_customers", "details"
+    }
     assert payload["mismatched"] == 1
 
 
@@ -321,7 +395,7 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
 
     with caplog.at_level("INFO"):
-        await job.main()
+        assert await job.main() == 0, "drift that was repaired is a successful run"
 
     finished = [r for r in caplog.records if getattr(r, "context", {}).get(
         "event") == "reconcile.finished"]
@@ -332,6 +406,34 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     assert fields["repaired"] == 1
 
     assert reconciliation_drift._value.get() == 1, "the gauge must carry the drift count"
+
+
+async def test_reconcile_main_fails_the_process_when_a_repair_failed(
+    session, stripe, monkeypatch, caplog
+):
+    """A failed repair no longer stops the run -- that is the point -- but the
+    scheduler must still see the job fail. Otherwise a customer stuck on the
+    wrong tier every night looks exactly like a clean run."""
+    from app.jobs import reconcile as job
+
+    await seed(session, tier=Tier.FREE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+
+    async def stripe_down(customer_id):
+        raise ConnectionError("stripe is down")
+
+    monkeypatch.setattr(stripe_client, "fetch_current_subscription", stripe_down)
+    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
+    monkeypatch.setattr(job, "dispose_engine", _noop)
+    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+
+    with caplog.at_level("INFO"):
+        assert await job.main() == 1
+
+    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
+        "event") == "reconcile.finished"]
+    assert finished and finished[0].context["failed"] == 1
 
 
 async def test_expire_grace_main_reports_what_it_revoked(session, monkeypatch, caplog):

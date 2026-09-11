@@ -32,7 +32,7 @@ which `make run` touches.
 |---|---|---|---|
 | API | `api` | scale horizontally | stateless; one uvicorn worker per container |
 | migrations | `migrate` | exactly one, before the API rolls | must finish before new code serves |
-| reconcile | `reconcile` | one, nightly | alert if it reports drift |
+| reconcile | `reconcile` | one, nightly | alert if it reports drift or exits non-zero |
 | expire-grace | `expire-grace` | one, nightly | closes dunning windows |
 
 **One worker per container, not `WEB_CONCURRENCY=4`.** `/metrics` is per-process
@@ -133,6 +133,13 @@ them to do it at once.
 Reconciliation sets `reconciliation_drift`, but in *its* process, which nothing
 scrapes. Alert on its `reconcile.finished` log line and the `mismatched` field
 instead. That is a real limitation, not an oversight — see the README.
+
+Each customer is checked and repaired in its own transaction. One failure — a
+Stripe timeout, or a lock timeout against a webhook for the same customer — is
+logged, listed in `failed`, and skipped, rather than rolling back every repair
+made before it. The process still exits 1 when `failed` is non-empty, so the
+scheduler shows the run as failed and the customers it names are still on the
+wrong tier.
 
 ## Configuration
 
