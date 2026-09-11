@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
 
 from app.models import Subscription
+from app.services.entitlements import commit_and_invalidate
 
 
 def _statement(lock: bool):
@@ -64,7 +65,7 @@ async def test_sync_takes_the_lock(session, stripe, monkeypatch):
     stripe.set_subscription("cus_lock", status="active", price_id="price_pro_m")
 
     await subscriptions.sync_subscription_from_stripe(session, stripe_customer_id="cus_lock")
-    await session.commit()
+    await commit_and_invalidate(session)
 
     assert order[0] == "select(lock=True)", f"lock must come first, got {order}"
     assert "stripe.fetch" in order

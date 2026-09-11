@@ -102,7 +102,10 @@ async def resync(user_id: str, session: AsyncSession = Depends(get_session)) -> 
     await sync_subscription_from_stripe(
         session, stripe_customer_id=sub.stripe_customer_id, reason="admin.resync"
     )
-    await session.commit()
+    # A plain commit here dropped the invalidation the sync registered: the row
+    # was repaired while the API kept serving the cached tier, so the customer
+    # support had just fixed looked unfixed until the entry expired.
+    await commit_and_invalidate(session)
     return {"status": "resynced", "tier": sub.tier, "subscription_status": sub.status}
 
 

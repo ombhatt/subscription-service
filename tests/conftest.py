@@ -52,6 +52,38 @@ from app.main import app
 from app.models import Base
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "allow_undrained: this test commits under a marking write on purpose",
+    )
+
+
+@pytest.fixture(autouse=True)
+def no_dropped_invalidations(request):
+    """Fail any test during which a plain `session.commit()` dropped the
+    entitlement invalidations a write had registered.
+
+    The detector in `app.services.entitlements` only logs, which is right in
+    production and no use in a test run: a log line inside a passing test is
+    read by nobody. #42 moved the marking write paths to
+    `commit_and_invalidate` and missed two -- `admin.resync` and `reconcile` --
+    and the suite stayed green. This turns that log line into a failure.
+    """
+    from app.observability import entitlement_invalidations
+
+    undrained = entitlement_invalidations.labels(outcome="undrained")
+    before = undrained._value.get()
+    yield
+    if request.node.get_closest_marker("allow_undrained"):
+        return
+    dropped = undrained._value.get() - before
+    assert dropped == 0, (
+        f"a plain session.commit() dropped entitlement invalidations {dropped:g} "
+        "time(s) in this test -- commit marking writes with commit_and_invalidate()"
+    )
+
+
 @pytest.fixture(autouse=True)
 def fresh_cache():
     set_cache(InMemoryBackend())
