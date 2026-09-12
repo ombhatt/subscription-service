@@ -5,7 +5,9 @@ jobs are the same build with a different argument, so a job can never run
 against a different version of the code than the API it shares a database with.
 
 ```bash
-docker build -t subscription-api .
+# --pull fetches the current base image; add --no-cache for a release so the
+# Dockerfile's Debian security-update layer re-runs instead of coming from cache.
+docker build --pull -t subscription-api .
 
 docker run subscription-api                 # serve HTTP  (default: `api`)
 docker run subscription-api migrate         # alembic upgrade head, then exit

@@ -27,6 +27,19 @@ RUN pip install --no-deps -r requirements.lock && pip check
 # -------------------------------------------------------------- runtime ----
 FROM python:3.12-slim-bookworm AS runtime
 
+# Debian's security fixes, installed at build time rather than waiting for the
+# base tag to be rebuilt upstream -- which happens on Docker's schedule, often
+# days after Debian ships the fix. The nightly image scan found exactly that
+# gap: two HIGH CVEs in libpcre2-8-0 with a fixed package already in
+# bookworm-security while python:3.12-slim-bookworm still carried the old one.
+#
+# Runtime stage only; the builder's packages never ship. A cached copy of this
+# layer stops receiving fixes, so release builds should pass --pull --no-cache
+# (the scheduled scan in security.yml does).
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # Nothing here needs root. Running as one means a container escape starts with
 # uid 0, and it makes read-only-rootfs deployments awkward for no benefit.
 RUN useradd --create-home --uid 10001 app

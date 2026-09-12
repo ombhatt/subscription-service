@@ -136,7 +136,12 @@ jobs:
           context: .
           load: true
           tags: subscription-api:scan
-          cache-from: type=gha
+          # Fresh every time. The scheduled run exists to catch advisories
+          # published against an image nobody has changed; building from the
+          # layer cache would scan yesterday's OS packages, and the Dockerfile's
+          # security-update layer would never re-run.
+          pull: true
+          no-cache: true
 
       - name: Scan it
         uses: aquasecurity/trivy-action@v0.36.0
@@ -175,7 +180,9 @@ jobs:
       - name: Initialise CodeQL
         uses: github/codeql-action/init@v4
         with:
-          language: ${{ matrix.language }}
+          # `languages`, plural. The singular was never a valid input: CodeQL
+          # warned on every run and fell back to detecting languages itself.
+          languages: ${{ matrix.language }}
           # security-extended adds lower-confidence rules. Worth it on a
           # codebase this size, where the extra findings are reviewable rather
           # than a flood.
