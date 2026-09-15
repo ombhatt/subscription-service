@@ -9,8 +9,14 @@ name: Stripe sandbox lifecycle
 #                    writes, merged green, and turned the nightly red for two
 #                    days: until then only the nightly ran this suite.
 #
-# One definition, so the sandbox-key guard and the clock cleanup cannot drift
+# One definition, so the credential guard and the cleanup steps cannot drift
 # apart between the two callers.
+#
+# The database is the Supabase project's Postgres, reached as the scoped
+# `ci_runner` role (scripts/ci_db_role.sql). Each test builds its tables in a
+# schema of its own and drops it, so nothing touches `public`, where the
+# service's real data lives. It also means every nightly run is real database
+# activity, which keeps a free-plan project from being paused for inactivity.
 on:
   workflow_call:
     inputs:
@@ -36,6 +42,9 @@ jobs:
       STRIPE_PRICE_PLUS_ANNUAL: ${{ secrets.STRIPE_PRICE_PLUS_ANNUAL }}
       STRIPE_PRICE_PRO_MONTHLY: ${{ secrets.STRIPE_PRICE_PRO_MONTHLY }}
       STRIPE_PRICE_PRO_ANNUAL: ${{ secrets.STRIPE_PRICE_PRO_ANNUAL }}
+      # postgresql+asyncpg://ci_runner.<project ref>:<password>@<session pooler host>:5432/postgres
+      # The session pooler: GitHub runners have no IPv6, which the direct host needs.
+      INTEGRATION_DATABASE_URL: ${{ secrets.INTEGRATION_DATABASE_URL }}
       # Tags every clock this job creates, so cleanup can tell them apart from
       # simulations opened by hand in the Dashboard. Pull request runs and the
       # nightly share it on purpose: either one sweeps up the other's orphans.
@@ -43,8 +52,9 @@ jobs:
       ENVIRONMENT: ci
 
     steps:
-      # First, and before checkout, so a run with no key costs seconds.
-      - name: Check the key is present and is a sandbox key
+      # First, and before checkout, so a run with no credentials costs seconds.
+      # Never echoes either value.
+      - name: Check the Stripe key and database credential
         id: key
         env:
           MISSING_KEY: ${{ inputs.missing-key }}
@@ -60,15 +70,33 @@ jobs:
             exit 1
           fi
           case "${STRIPE_SECRET_KEY}" in
-            sk_test_*)
-              echo "sandbox key present"
-              echo "run=true" >> "$GITHUB_OUTPUT"
-              ;;
+            sk_test_*) echo "sandbox key present" ;;
             *)
               echo "::error::STRIPE_SECRET_KEY is not a sandbox key. Refusing to run."
               exit 1
               ;;
           esac
+
+          if [ -z "${INTEGRATION_DATABASE_URL}" ]; then
+            if [ "${MISSING_KEY}" = "skip" ]; then
+              echo "::notice::No INTEGRATION_DATABASE_URL reaches this run. Skipping; the nightly still runs this suite."
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::INTEGRATION_DATABASE_URL secret is not set on this repository (see scripts/ci_db_role.sql)."
+            exit 1
+          fi
+          # The project holds the service's real data; an admin credential here
+          # could read or destroy it. The suite checks the role's actual
+          # privileges too -- this just refuses the obvious case before it connects.
+          case "${INTEGRATION_DATABASE_URL}" in
+            *://postgres:*|*://postgres.*|*://supabase_admin:*|*://supabase_admin.*)
+              echo "::error::INTEGRATION_DATABASE_URL uses an admin role. Use ci_runner (scripts/ci_db_role.sql)."
+              exit 1
+              ;;
+          esac
+          echo "database credential present"
+          echo "run=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v7
         if: steps.key.outputs.run == 'true'
@@ -98,3 +126,10 @@ jobs:
       - name: Clean up orphaned clocks
         if: ${{ always() && steps.key.outputs.run == 'true' }}
         run: python -m scripts.cleanup_test_clocks --prefix ci- --older-than 60
+
+      # Same reasoning for the per-test schemas: a killed job never reaches the
+      # fixture teardown. Only drops generated `ci_<epoch>_<hex>` schemas owned by
+      # ci_runner and older than an hour.
+      - name: Clean up orphaned schemas
+        if: ${{ always() && steps.key.outputs.run == 'true' }}
+        run: python -m scripts.cleanup_ci_schemas --older-than 60
