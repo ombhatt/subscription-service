@@ -17,6 +17,8 @@ on:
       - "app/**"
       - "integration/**"
       - "scripts/cleanup_test_clocks.py"
+      - "scripts/cleanup_ci_schemas.py"
+      - "scripts/ci_db_role.sql"
       - "requirements.lock"
       - "requirements-dev.txt"
       - "pyproject.toml"

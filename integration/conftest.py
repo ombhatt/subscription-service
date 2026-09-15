@@ -12,12 +12,23 @@ and runs from its own workflow, `.github/workflows/stripe-sandbox.yml`: nightly,
 and on pull requests that touch the service.
 
     make testclock          # or: .venv/bin/pytest integration/ -v
+
+Database: SQLite in a temporary file by default. With INTEGRATION_DATABASE_URL
+set (always, in CI) it is the Supabase project's Postgres instead, so row locks,
+`lock_timeout`, JSONB and the connection pooler are exercised for real rather
+than approximated. Each test gets its own `ci_<epoch>_<hex>` schema, dropped at
+teardown, and the credential must be the scoped `ci_runner` role from
+scripts/ci_db_role.sql -- never `postgres`, because that project also holds the
+service's real data.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import pathlib
 import time
+from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
@@ -28,12 +39,26 @@ import pytest_asyncio
 os.environ["REDIS_URL"] = ""
 
 import stripe
+from dotenv import dotenv_values
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
+from app.db import engine_kwargs
 from app.models import Base
 from app.stripe_client import _as_dict
+from scripts.cleanup_ci_schemas import new_schema_name
+
+# Postgres when set. Read from the environment first (CI), then .env (local runs
+# that want the same database CI uses).
+INTEGRATION_DATABASE_URL = os.environ.get("INTEGRATION_DATABASE_URL") or (
+    dotenv_values(pathlib.Path(__file__).resolve().parents[1] / ".env").get(
+        "INTEGRATION_DATABASE_URL"
+    )
+    or ""
+)
+# Credentials that can read the service's real tables. Refused outright.
+ADMIN_USERS = {"postgres", "supabase_admin"}
 
 # Prefixed onto every clock this suite creates. CI sets it so the cleanup step
 # can delete only what CI made -- nightly and pull request runs share a sandbox
@@ -59,19 +84,94 @@ def pytest_configure(config):
         )
     stripe.api_key = settings.stripe_secret_key
 
+    if not INTEGRATION_DATABASE_URL:
+        if os.environ.get("CI"):
+            # A silent fallback to SQLite would pass while testing none of what
+            # this run exists for -- and stop keeping the Supabase project active.
+            pytest.exit(
+                "INTEGRATION_DATABASE_URL is not set. CI runs integration/ against "
+                "Supabase Postgres; see scripts/ci_db_role.sql.",
+                returncode=1,
+            )
+        return
+    _refuse_privileged_credentials(INTEGRATION_DATABASE_URL)
+
+
+def _refuse_privileged_credentials(url: str) -> None:
+    """Fail closed before any test can touch the database.
+
+    The target project holds the service's real data. Checked by name first, so
+    an admin URL never even connects, then by what the role can actually do.
+    """
+    user = (urlsplit(url).username or "").split(".")[0]
+    if user in ADMIN_USERS:
+        pytest.exit(
+            f"INTEGRATION_DATABASE_URL connects as {user!r}, which can read the "
+            "service's real data. Use the scoped ci_runner role "
+            "(scripts/ci_db_role.sql).",
+            returncode=1,
+        )
+
+    async def probe() -> tuple[bool, bool]:
+        eng = create_async_engine(url, poolclass=NullPool, **engine_kwargs(url))
+        try:
+            async with eng.connect() as conn:
+                row = (
+                    await conn.exec_driver_sql(
+                        "select r.rolsuper or r.rolbypassrls, "
+                        "coalesce(has_table_privilege(to_regclass('public.subscriptions'), "
+                        "'SELECT'), false) "
+                        "from pg_roles r where r.rolname = current_user"
+                    )
+                ).one()
+        finally:
+            await eng.dispose()
+        return bool(row[0]), bool(row[1])
+
+    bypasses, reads_real_data = asyncio.run(probe())
+    if bypasses or reads_real_data:
+        pytest.exit(
+            f"INTEGRATION_DATABASE_URL's role is over-privileged "
+            f"(superuser/bypassrls={bypasses}, reads public.subscriptions={reads_real_data}). "
+            "Use the scoped ci_runner role (scripts/ci_db_role.sql).",
+            returncode=1,
+        )
+
 
 @pytest_asyncio.fixture
 async def engine(tmp_path_factory):
-    path = tmp_path_factory.mktemp("clockdb") / "integration.sqlite3"
-    eng = create_async_engine(
-        f"sqlite+aiosqlite:///{path}",
-        poolclass=NullPool,
-        connect_args={"check_same_thread": False, "timeout": 30},
-    )
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield eng
-    await eng.dispose()
+    if not INTEGRATION_DATABASE_URL:
+        path = tmp_path_factory.mktemp("clockdb") / "integration.sqlite3"
+        eng = create_async_engine(
+            f"sqlite+aiosqlite:///{path}",
+            poolclass=NullPool,
+            connect_args={"check_same_thread": False, "timeout": 30},
+        )
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield eng
+        await eng.dispose()
+        return
+
+    # Postgres: a schema of its own per test, so tests start empty, concurrent
+    # runs cannot see each other, and nothing lands in `public` where the
+    # service's data lives. The translate map points every model table at it,
+    # for DDL and queries alike; the service's raw SQL names no tables.
+    url = INTEGRATION_DATABASE_URL
+    schema = new_schema_name()
+    base = create_async_engine(url, poolclass=NullPool, **engine_kwargs(url))
+    async with base.begin() as conn:
+        await conn.exec_driver_sql(f'create schema "{schema}"')
+    eng = base.execution_options(schema_translate_map={None: schema})
+    try:
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield eng
+    finally:
+        # A killed process never gets here; scripts/cleanup_ci_schemas.py does.
+        async with base.begin() as conn:
+            await conn.exec_driver_sql(f'drop schema if exists "{schema}" cascade')
+        await base.dispose()
 
 
 @pytest_asyncio.fixture

@@ -407,6 +407,26 @@ nightly only, which is how #41 broke it and still merged green. Dependabot and
 fork pull requests receive no repository secrets, so there it skips with a
 notice instead of failing; the nightly still covers them after merge.
 
+In CI it runs against the **Supabase project's Postgres**, not SQLite, so row
+locks, `lock_timeout`, JSONB and the pooler are exercised for real. Each test
+gets its own `ci_<epoch>_<hex>` schema, dropped at teardown and swept up by
+[`scripts/cleanup_ci_schemas.py`](scripts/cleanup_ci_schemas.py) if a run is
+killed. It connects as `ci_runner`, which can create schemas and nothing else:
+it cannot read or write `public` (the service's data) or `auth.users`, and the
+suite refuses to start with `postgres` or any role that could. Nightly runs are
+also what keep a free-plan project from being paused for inactivity.
+
+One-time setup:
+
+1. Run [`scripts/ci_db_role.sql`](scripts/ci_db_role.sql) in the Supabase SQL
+   editor. It creates `ci_runner` with no login and no password.
+2. In the same editor, enable it with a password you generate:
+   `alter role ci_runner with login password '...';`
+3. `gh secret set INTEGRATION_DATABASE_URL`, with
+   `postgresql+asyncpg://ci_runner.<project ref>:<password>@<session pooler host>:5432/postgres`.
+
+Locally the suite stays on SQLite unless `INTEGRATION_DATABASE_URL` is set.
+
 One thing it cannot do, by construction: **a test clock moves Stripe's time,
 not ours**:
 `past_due_since` is stamped with real wall-clock time, so advancing a simulation
