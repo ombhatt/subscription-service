@@ -17,4 +17,4 @@ prometheus-client>=0.21
 # Feature flags. Evaluation is local against an in-memory snapshot -- the
 # only network call is the background refresh -- so this does not sit in
 # the request path. Brings aiohttp and its tree with it.
-growthbook>=3.1
+growthbook>=3.1.1
