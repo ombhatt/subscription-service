@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     checkout_cancel_url: str = "http://localhost:3000/billing"
     portal_return_url: str = "http://localhost:3000/billing"
 
+    # --- abuse control ---
+    # POST /v1/billing/contact-sales is the only unauthenticated write, and
+    # every accepted request inserts a row. Counted per caller, per window; 0
+    # disables a window. Generous on purpose -- a real person fills this form
+    # once, and anyone hitting five in an hour is testing or scripting it.
+    contact_sales_per_hour: int = 5
+    contact_sales_per_day: int = 20
+    # Read the caller's address from X-Forwarded-For. Off by default because
+    # the header is forgeable when nothing in front rewrites it. Turn it on
+    # wherever a proxy or CDN terminates TLS, or every caller shares one budget.
+    trust_proxy_headers: bool = False
+
     dunning_grace_days: int = 7
     entitlement_cache_ttl: int = 60
 

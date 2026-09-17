@@ -60,6 +60,30 @@ class FeatureNotEntitled(Exception):
         }
 
 
+class RateLimited(Exception):
+    """Raised by app/ratelimit.py. Carries what the caller needs to back off:
+    the cap, the window it applies to, and when to try again."""
+
+    def __init__(self, *, scope: str, limit: int, window_seconds: int, retry_after: int) -> None:
+        self.scope = scope
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self.retry_after = retry_after
+        super().__init__(f"rate limit for {scope!r} exceeded: {limit}/{window_seconds}s")
+
+    def to_payload(self) -> dict:
+        # `detail` because that is the field the frontend's ApiError surfaces,
+        # so a blocked visitor reads this sentence rather than "Request failed".
+        return {
+            "error": "rate_limited",
+            "detail": (
+                "Too many requests from this network. "
+                f"Please try again in {self.retry_after} seconds."
+            ),
+            "retry_after": self.retry_after,
+        }
+
+
 class BillingError(HTTPException):
     def __init__(self, detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> None:
         super().__init__(status_code=code, detail=detail)

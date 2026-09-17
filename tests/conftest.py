@@ -29,6 +29,10 @@ os.environ.update(
         "STRIPE_PRICE_PRO_MONTHLY": "price_pro_m",
         "STRIPE_PRICE_PRO_ANNUAL": "price_pro_y",
         "DUNNING_GRACE_DAYS": "7",
+        # Out of the way of every test that is not about rate limiting;
+        # tests/test_rate_limit.py sets its own windows.
+        "CONTACT_SALES_PER_HOUR": "1000",
+        "CONTACT_SALES_PER_DAY": "1000",
         "ENTITLEMENT_CACHE_TTL": "60",
         # Explicitly blank so the suite never picks up a real key from a
         # developer's .env. Without this the flag tests pass in CI, which

@@ -148,8 +148,9 @@ async def test_the_submission_is_counted(client, session):
 
 
 async def test_junk_is_rejected_before_it_reaches_the_table(client, session):
-    """The only thing bounding this endpoint is the schema -- there is no rate
-    limiting, and it is the one unauthenticated write in the service."""
+    """The schema is the other half of bounding this endpoint; the rate limit
+    (tests/test_rate_limit.py) is the first half, and this is the one
+    unauthenticated write in the service."""
     for body in (
         {"email": "not-an-email"},
         {"email": "a@b.com", "message": "x" * 2001},

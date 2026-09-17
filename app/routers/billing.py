@@ -15,6 +15,7 @@ from app.models import SalesInquiry
 from app.observability import event as log_event
 from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
+from app.ratelimit import contact_sales_rate_limit
 from app.schemas import (
     CheckoutRequest,
     CheckoutResponse,
@@ -176,7 +177,12 @@ async def billing_health() -> dict:
     return {"status": "ok", "unconfigured_prices": missing}
 
 
-@router.post("/contact-sales", response_model=ContactSalesResponse, status_code=201)
+@router.post(
+    "/contact-sales",
+    response_model=ContactSalesResponse,
+    status_code=201,
+    dependencies=[Depends(contact_sales_rate_limit)],
+)
 async def contact_sales(
     body: ContactSalesRequest,
     user: CurrentUser | None = Depends(get_current_user_optional),
@@ -188,11 +194,12 @@ async def contact_sales(
     worth having are often from people evaluating before they sign up --
     requiring a login here would filter out exactly those.
 
-    That makes this the only unauthenticated write in the service, and there is
-    no rate limiting: the field lengths in ContactSalesRequest are the only
-    thing bounding what a script can insert. `sales_inquiries_total` is the
-    signal to watch, and edge rate limiting is on the list in the README before
-    this takes real traffic.
+    That makes this the only unauthenticated write in the service, so it is
+    rate limited per caller (app/ratelimit.py) as well as length-bounded by
+    ContactSalesRequest. The limiter runs as a dependency, before the body is
+    validated, so malformed attempts are counted too. It fails open, so
+    `rate_limit_errors_total` is the metric that says it has stopped limiting;
+    `sales_inquiries_total` remains the signal for a flood that gets through.
 
     Nothing is emailed from here. Recording it durably is the job; who gets
     notified is a workflow decision, and a background send would be one more
