@@ -125,3 +125,57 @@ test("no discount means no banner", async ({ page, api }) => {
   await page.goto("/billing");
   await expect(page.locator(".banner", { hasText: "Discount applied" })).toHaveCount(0);
 });
+
+test("cancelling in the app schedules the end of the period", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+  await expect(page.getByText(/Renews Oct 3, 2026/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Cancel subscription" }).click();
+  await page.getByRole("button", { name: /Yes, cancel/ }).click();
+
+  await expect(page.locator(".banner.warn")).toContainText("Subscription ending");
+  // The card must agree with the banner: it no longer renews.
+  await expect(page.getByText(/Ends Oct 3, 2026/)).toBeVisible();
+  await expect(page.getByText(/Renews/)).toHaveCount(0);
+  expect(api.cancelCalls).toBe(1);
+});
+
+test("the confirmation step can be backed out of", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  await page.getByRole("button", { name: "Cancel subscription" }).click();
+  await expect(page.getByText(/Cancel your Pro plan\?/)).toBeVisible();
+  await page.getByRole("button", { name: "Keep my plan" }).click();
+
+  await expect(page.getByText(/Cancel your Pro plan\?/)).toHaveCount(0);
+  await expect(page.getByText(/Renews Oct 3, 2026/)).toBeVisible();
+  expect(api.cancelCalls).toBe(0);
+});
+
+test("a plan already ending offers no cancel button", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    cancelAtPeriodEnd: true,
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  await expect(page.getByRole("button", { name: "Cancel subscription" })).toHaveCount(0);
+});

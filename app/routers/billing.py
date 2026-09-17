@@ -11,7 +11,7 @@ from app.cache import get_json, set_json
 from app.db import get_session
 from app.errors import BillingError
 from app.flags import is_enabled
-from app.models import SalesInquiry
+from app.models import SalesInquiry, Subscription
 from app.observability import event as log_event
 from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
@@ -24,8 +24,13 @@ from app.schemas import (
     PortalResponse,
     SubscriptionSummary,
 )
-from app.services.entitlements import resolve_entitlements
-from app.services.subscriptions import get_or_create_subscription, open_portal, start_checkout
+from app.services.entitlements import commit_and_invalidate, resolve_entitlements
+from app.services.subscriptions import (
+    get_or_create_subscription,
+    open_portal,
+    schedule_cancellation,
+    start_checkout,
+)
 
 log = logging.getLogger(__name__)
 
@@ -138,13 +143,7 @@ async def portal(
     return PortalResponse(portal_url=url)
 
 
-@router.get("/subscription", response_model=SubscriptionSummary)
-async def my_subscription(
-    user: CurrentUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> SubscriptionSummary:
-    sub = await get_or_create_subscription(session, user.id)
-    await session.commit()
+def _summary(sub: Subscription) -> SubscriptionSummary:
     return SubscriptionSummary(
         user_id=sub.user_id,
         tier=Tier(sub.tier),
@@ -161,6 +160,36 @@ async def my_subscription(
         disputed_at=sub.disputed_at,
         discount=sub.discount,
     )
+
+
+@router.get("/subscription", response_model=SubscriptionSummary)
+async def my_subscription(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionSummary:
+    sub = await get_or_create_subscription(session, user.id)
+    await session.commit()
+    return _summary(sub)
+
+
+@router.post("/cancel", response_model=SubscriptionSummary)
+async def cancel(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionSummary:
+    """Cancel at the end of the paid period.
+
+    In the app rather than only in Stripe's portal: cancelling is the one thing
+    a customer should never have to hunt for, and a support ticket asking how
+    to leave costs more than the button.
+
+    Immediate cancellation is deliberately not offered here. They paid through
+    the period, so ending it early is a refund conversation -- which is what the
+    portal and Stripe's dashboard are for.
+    """
+    sub = await schedule_cancellation(session, user_id=user.id)
+    await commit_and_invalidate(session)
+    return _summary(sub)
 
 
 @router.get("/health")

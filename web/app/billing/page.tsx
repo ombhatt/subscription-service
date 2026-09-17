@@ -5,7 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import Banner from "@/components/Banner";
 import QuotaMeter from "@/components/QuotaMeter";
-import { ApiError, getEntitlements, getSubscription, openPortal } from "@/lib/api";
+import {
+  ApiError,
+  cancelSubscription,
+  getEntitlements,
+  getSubscription,
+  openPortal,
+} from "@/lib/api";
 import type { Entitlements, SubscriptionSummary } from "@/lib/types";
 import { describeDiscount, formatDate, humanizeKey } from "@/lib/types";
 import { useRequireSession } from "@/lib/user";
@@ -16,6 +22,10 @@ export default function BillingPage() {
   const [sub, setSub] = useState<SubscriptionSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Cancelling is irreversible in the sense that matters -- the customer has to
+  // go and reactivate -- so it takes two deliberate clicks, not one.
+  const [confirming, setConfirming] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -43,6 +53,22 @@ export default function BillingPage() {
       setBusy(false);
     }
   }, [email, ready]);
+
+  const cancel = useCallback(async () => {
+    setCancelling(true);
+    setError(null);
+    try {
+      setSub(await cancelSubscription());
+      // Re-read rather than patch local state: the banner and the plan card are
+      // driven by entitlements, and the server has just invalidated its copy.
+      setEnts(await getEntitlements());
+      setConfirming(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setCancelling(false);
+    }
+  }, []);
 
   if (!ready || (!ents && !error))
     return (
@@ -111,7 +137,12 @@ export default function BillingPage() {
                 </h2>
                 <p className="muted" style={{ margin: 0 }}>
                   {ents.source === "subscription"
-                    ? `Renews ${formatDate(ents.current_period_end)}`
+                    ? ents.cancel_at_period_end
+                      ? // Not "Renews": it does not. The banner above says the
+                        // same thing, and disagreeing with it on one screen is
+                        // how a customer ends up opening a support ticket.
+                        `Ends ${formatDate(ents.current_period_end)}`
+                      : `Renews ${formatDate(ents.current_period_end)}`
                     : ents.source === "grant"
                       ? "Granted plan"
                       : "No paid subscription"}
@@ -126,6 +157,37 @@ export default function BillingPage() {
                 </button>
               </div>
             </div>
+
+            {ents.source === "subscription" && !ents.cancel_at_period_end && (
+              <div style={{ marginTop: 16 }}>
+                {confirming ? (
+                  <div className="stack" role="group" aria-label="Confirm cancellation">
+                    <p style={{ margin: 0 }}>
+                      Cancel your {ents.display_name} plan? You keep it until{" "}
+                      <strong>{formatDate(ents.current_period_end)}</strong>, then move to
+                      Free. Nothing is charged after that.
+                    </p>
+                    <div className="inline">
+                      <button
+                        className="primary"
+                        onClick={cancel}
+                        disabled={cancelling}
+                        aria-busy={cancelling}
+                      >
+                        {cancelling ? "Cancelling…" : `Yes, cancel on ${formatDate(ents.current_period_end)}`}
+                      </button>
+                      <button className="btn" onClick={() => setConfirming(false)} disabled={cancelling}>
+                        Keep my plan
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn" onClick={() => setConfirming(true)}>
+                    Cancel subscription
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="card">

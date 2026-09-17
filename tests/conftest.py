@@ -180,6 +180,7 @@ class FakeStripe:
         self.checkout_sessions: list[dict] = []
         self.portal_sessions: list[dict] = []
         self.next_customer = 0
+        self.cancel_calls = 0
         # How many subscriptions list_subscriptions_page returns at a time.
         self.page_size = 100
 
@@ -211,6 +212,14 @@ class FakeStripe:
         }
         self.checkout_sessions.append(session)
         return session
+
+    async def set_cancel_at_period_end(self, subscription_id, value=True):
+        self.cancel_calls += 1
+        for sub in self.subscriptions.values():
+            if sub["id"] == subscription_id:
+                sub["cancel_at_period_end"] = bool(value)
+                return sub
+        raise AssertionError(f"no such subscription: {subscription_id}")
 
     async def create_portal_session(self, *, customer_id, return_url):
         session = {"id": "bps_test", "url": "https://portal.stripe.test/session"}
@@ -302,6 +311,7 @@ def stripe(monkeypatch) -> FakeStripe:
         "fetch_current_subscription",
         "create_checkout_session",
         "create_portal_session",
+        "set_cancel_at_period_end",
         "list_subscriptions_page",
         "retrieve_charge",
         "retrieve_price",

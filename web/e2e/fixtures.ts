@@ -84,6 +84,7 @@ export class FakeApi {
   entitlementReads = 0;
   checkoutCalls = 0;
   portalCalls = 0;
+  cancelCalls = 0;
 
   constructor(overrides: Partial<FakeState> = {}) {
     this.state = {
@@ -235,6 +236,14 @@ export async function mockApi(page: Page, api: FakeApi) {
     await route.fulfill({
       json: { checkout_url: "http://localhost:3000/billing/success", session_id: "cs_test_fake" },
     });
+  });
+
+  await page.route("**/api/v1/billing/cancel", async (route) => {
+    api.cancelCalls += 1;
+    // What the real endpoint does: schedules the end of the period and leaves
+    // tier and status alone.
+    api.state.cancelAtPeriodEnd = true;
+    await route.fulfill({ json: api.subscription() });
   });
 
   await page.route("**/api/v1/billing/portal", async (route) => {
