@@ -140,6 +140,20 @@ async def create_checkout_session(
     return _as_dict(session)
 
 
+async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> dict:
+    """Schedule a cancellation for the end of the paid period, or undo one.
+
+    Deliberately not `Subscription.delete`: that ends the subscription now, and
+    the customer has already paid through the period. Stripe closes it at the
+    boundary and sends `customer.subscription.deleted` then, which is what
+    drops them to free.
+    """
+    api = _client()
+    return _as_dict(
+        await _call(api.Subscription.modify, subscription_id, cancel_at_period_end=value)
+    )
+
+
 async def create_portal_session(*, customer_id: str, return_url: str) -> dict:
     api = _client()
     session = await _call(

@@ -125,6 +125,15 @@ export function getSubscription() {
   return request<SubscriptionSummary>("/v1/billing/subscription");
 }
 
+/**
+ * Cancel at the end of the paid period. The plan stays active until then, which
+ * is why this returns the subscription rather than a bare acknowledgement: the
+ * end date is the thing the caller has to show.
+ */
+export function cancelSubscription() {
+  return request<SubscriptionSummary>("/v1/billing/cancel", { method: "POST" });
+}
+
 export function openPortal() {
   return request<{ portal_url: string }>("/v1/billing/portal", { method: "POST" });
 }

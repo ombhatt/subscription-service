@@ -453,6 +453,39 @@ def _checkout_idempotency_key(**params: object) -> str:
     return f"checkout:{user_id}:{datetime.now(UTC):%Y-%m-%d}:{digest}"
 
 
+async def schedule_cancellation(session: AsyncSession, *, user_id: str) -> Subscription:
+    """Cancel at the end of the paid period.
+
+    Nothing here writes `tier` or `status`. It asks Stripe to set
+    `cancel_at_period_end`, then re-reads through the one sync path, so the
+    mirror keeps a single writer and the local row can never claim a
+    cancellation Stripe did not accept.
+
+    Access is unchanged until the boundary -- that is the point -- and the
+    `customer.subscription.deleted` webhook is what moves them to free.
+
+    Idempotent: cancelling an already-cancelling subscription is a no-op rather
+    than a second call to Stripe.
+    """
+    sub = await get_subscription(session, user_id)
+    if sub is None or not sub.stripe_subscription_id:
+        raise BillingError("no subscription to cancel", code=404)
+    if sub.status not in (s.value for s in PAID_STATUSES):
+        raise BillingError(f"a {sub.status} subscription cannot be cancelled", code=409)
+    if sub.cancel_at_period_end:
+        return sub
+
+    await stripe_client.set_cancel_at_period_end(sub.stripe_subscription_id)
+    synced = await sync_subscription_from_stripe(
+        session,
+        stripe_customer_id=sub.stripe_customer_id,
+        reason="customer.cancel_at_period_end",
+    )
+    # sync returns None only when the customer cannot be resolved, which cannot
+    # happen here: we just read the row that carries the id.
+    return synced or sub
+
+
 async def open_portal(session: AsyncSession, *, user_id: str, return_url: str | None = None) -> str:
     settings = get_settings()
     sub = await get_subscription(session, user_id)

@@ -251,9 +251,17 @@ discount becomes a data change rather than a component change.
 
 ### Money mechanics we deliberately do not own
 
-Change plan, cancel, reactivate, update card, download invoices — all of it is
-Stripe's hosted Customer Portal (`POST /v1/billing/portal`). That is why there
-is no billing UI and no proration code in this repo. Refunds are manual from the
+Change plan, reactivate, update card, download invoices — all of it is Stripe's
+hosted Customer Portal (`POST /v1/billing/portal`). That is why there is no
+billing UI and no proration code in this repo.
+
+The one exception is **cancelling**, which `POST /v1/billing/cancel` does
+in-app: leaving is the thing a customer should never have to hunt for. It sets
+`cancel_at_period_end` through Stripe and re-reads, so the mirror still has one
+writer, and access is unchanged until the boundary -- the
+`customer.subscription.deleted` webhook is what moves them to free. Cancelling
+*immediately* is deliberately not offered: they paid through the period, so
+ending it early is a refund conversation. Refunds are manual from the
 Stripe dashboard; automating them before you understand your own fraud patterns
 is premature.
 
@@ -281,7 +289,7 @@ A Next.js + TypeScript frontend lives in [`web/`](web) and is what
 |---|---|
 | `/` | pricing — limits from `plans.py`, amounts from Stripe, both via `/v1/billing/plans` |
 | `/login` | sign in or sign up |
-| `/billing` | live entitlements, quota meters, dunning and cancellation banners, any discount, portal link |
+| `/billing` | live entitlements, quota meters, dunning and cancellation banners, any discount, cancel (two-step), portal link |
 | `/billing/success` | where Stripe returns; **polls** until the webhook grants, and says so if it never does |
 | `/chat` | a metered endpoint rendering both paywalls: 403 locked model, 429 out of quota |
 
@@ -311,7 +319,7 @@ app/
     view.py            assembles the API payload
     audit.py           append-only transitions
   routers/
-    billing.py         checkout, portal, plans, subscription
+    billing.py         checkout, portal, cancel, plans, subscription
     webhooks.py        Stripe -> sync, plus an admin-only ops view
     entitlements.py    GET /v1/entitlements
     admin.py           support tooling
