@@ -25,7 +25,12 @@ from app.models import PAID_STATUSES, Subscription
 from app.observability import configure_logging, reconciliation_drift
 from app.observability import event as log_event
 from app.services.entitlements import commit_and_invalidate
-from app.services.subscriptions import STATUS_MAP, resolve_tier, sync_subscription_from_stripe
+from app.services.subscriptions import (
+    STATUS_MAP,
+    belongs_to_this_service,
+    resolve_tier,
+    sync_subscription_from_stripe,
+)
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +43,10 @@ class ReconcileReport:
     # Customers whose check or repair raised. Each was rolled back on its own and
     # the run carried on, so they may still be on the wrong tier.
     failed: list[str] = field(default_factory=list)
+    # Subscriptions in this Stripe account that belong to another application.
+    # Counted rather than listed: it is a property of the account, not a problem
+    # to work through, and on a shared account it is most of the page.
+    ignored: int = 0
     unknown_customers: list[str] = field(default_factory=list)
     details: list[dict] = field(default_factory=list)
 
@@ -47,6 +56,7 @@ class ReconcileReport:
             "mismatched": self.mismatched,
             "repaired": self.repaired,
             "failed": self.failed,
+            "ignored": self.ignored,
             "unknown_customers": self.unknown_customers,
             "details": self.details,
         }
@@ -123,6 +133,12 @@ async def _reconcile_one(
     )
     local = result.scalar_one_or_none()
 
+    if local is None and not belongs_to_this_service(remote):
+        # Another application's subscription in a shared Stripe account. Not
+        # drift, not an unknown customer of ours, and nothing to repair.
+        report.ignored += 1
+        return False
+
     if local is None:
         report.unknown_customers.append(customer_id)
         if dry_run:
@@ -185,6 +201,7 @@ async def main() -> int:
         log,
         "reconcile.finished",
         checked=report.checked,
+        ignored=report.ignored,
         mismatched=report.mismatched,
         repaired=report.repaired,
         failed=len(report.failed),
