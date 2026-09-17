@@ -160,6 +160,25 @@ STRIPE_PRICE_{PLUS,PRO}_{MONTHLY,ANNUAL}=price_...
 CHECKOUT_SUCCESS_URL / CHECKOUT_CANCEL_URL / PORTAL_RETURN_URL
 ```
 
+Optional, with defaults that are safe but conservative:
+
+```
+CONTACT_SALES_PER_HOUR=5           per caller, on the one unauthenticated write;
+CONTACT_SALES_PER_DAY=20           0 disables that window
+TRUST_PROXY_HEADERS=false          read the caller's address from X-Forwarded-For
+```
+
+`TRUST_PROXY_HEADERS` is the one to think about. Off, behind a proxy or CDN,
+every request carries the proxy's address and the whole internet shares a single
+budget -- the first real traffic spike locks everyone out. On, with nothing in
+front rewriting the header, a caller sets it themselves and the limit counts a
+value the attacker chooses. Turn it on exactly when something you control
+terminates TLS in front of the service (Vercel, Fly, Cloudflare, an ALB).
+
+The limiter fails open: if Redis is unreachable the request is allowed and
+`rate_limit_errors_total` increments. Alert on that counter -- a sustained
+non-zero rate means the public endpoint is no longer protected.
+
 Optional, but the reason flags exist:
 
 ```

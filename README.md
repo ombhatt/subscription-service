@@ -611,13 +611,18 @@ carries `mismatched` as a field.
       attributes. Migrations keep an admin credential through
       `MIGRATION_DATABASE_URL`, so a leaked runtime string cannot ALTER or DROP
       anything. Verify with `python -m scripts.check_db_role`.
-- [ ] **Rate limiting.** There is none, and `POST /v1/billing/contact-sales` is
-      now the only unauthenticated *write* in the service. The field lengths in
-      `ContactSalesRequest` are the only thing bounding what a script can
-      insert; watch `sales_inquiries_total` and put throttling at the edge
-      before this page gets real traffic. General throttling belongs at the edge;
-      the three worth doing in-app are admin auth attempts, checkout creation
-      per user, and any public promo-code lookup added later.
+- [x] **Rate limiting on the public write.** `POST /v1/billing/contact-sales`
+      is the only unauthenticated *write* in the service, and it is now capped
+      per caller by `app/ratelimit.py` -- two fixed windows (hour and day) over
+      the same atomic INCR-with-TTL the quota counters use. It runs as a
+      dependency, so malformed attempts count too, and it **fails open**:
+      `rate_limit_errors_total` is what says the endpoint is unprotected,
+      `rate_limit_rejections_total` what says it is working. Set
+      `TRUST_PROXY_HEADERS=true` wherever a proxy terminates TLS, or every
+      caller shares one budget.
+- [ ] **Throttling everywhere else.** General throttling still belongs at the
+      edge. The three worth doing in-app are admin auth attempts, checkout
+      creation per user, and any public promo-code lookup added later.
 - [ ] **Enable Stripe Tax** and set an origin address, or you are collecting no
       tax at all. You are the merchant of record on Stripe Billing: VAT and
       sales tax registration are yours.

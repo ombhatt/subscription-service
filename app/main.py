@@ -12,7 +12,7 @@ from app.auth import require_admin
 from app.cache import close_cache
 from app.config import get_settings
 from app.db import dispose_engine
-from app.errors import FeatureNotEntitled, QuotaExceeded
+from app.errors import FeatureNotEntitled, QuotaExceeded, RateLimited
 from app.flags import close_flags, init_flags
 from app.health import readiness
 from app.observability import (
@@ -68,6 +68,16 @@ app = FastAPI(
 async def quota_exceeded_handler(request: Request, exc: QuotaExceeded) -> JSONResponse:
     # 429 with everything the client needs to render the paywall in one shot.
     return JSONResponse(status_code=429, content=exc.to_payload())
+
+
+@app.exception_handler(RateLimited)
+async def rate_limited_handler(request: Request, exc: RateLimited) -> JSONResponse:
+    """429 with Retry-After, which is what a well-behaved client waits on."""
+    return JSONResponse(
+        status_code=429,
+        content=exc.to_payload(),
+        headers={"Retry-After": str(exc.retry_after)},
+    )
 
 
 @app.exception_handler(FeatureNotEntitled)

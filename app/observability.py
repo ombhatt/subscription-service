@@ -110,9 +110,28 @@ sales_inquiries = Counter(
     registry=REGISTRY,
 )
 
-# Also the abuse signal. This endpoint is public and unauthenticated by
-# necessity, and there is no rate limiting in this service: a sudden spike here
-# with no matching traffic elsewhere is what a scripted flood looks like.
+# Also the abuse signal: this endpoint is public and unauthenticated by
+# necessity, so a sudden spike here with no matching traffic elsewhere is what
+# a scripted flood looks like -- the part of one that got through, since
+# rate_limit_rejections_total counts the part that did not.
+
+rate_limit_rejections = Counter(
+    "rate_limit_rejections_total",
+    "Requests refused by a rate limit.",
+    ["scope", "window"],
+    registry=REGISTRY,
+)
+
+rate_limit_errors = Counter(
+    "rate_limit_errors_total",
+    "Rate limit checks that could not run. The request was allowed anyway.",
+    ["scope"],
+    registry=REGISTRY,
+)
+
+# The limiter fails open, so this counter is the only sign that it is not
+# actually limiting anything. Alert on it: a sustained non-zero rate means the
+# cache is unreachable and the public endpoint is unprotected.
 
 flag_evaluations = Counter(
     "feature_flag_evaluations_total",
