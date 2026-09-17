@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import Banner from "@/components/Banner";
 import ContactSales from "@/components/ContactSales";
+import Modal from "@/components/Modal";
 import PriceTag from "@/components/PriceTag";
 import { useCallback, useEffect, useState } from "react";
 
@@ -101,11 +103,16 @@ export default function PricingPage() {
         </Banner>
       )}
 
-      {talkingToSales && (
-        <div style={{ marginBottom: 20 }}>
-          <ContactSales source="pricing_page" />
-        </div>
-      )}
+      {/* A dialog, not a panel above the grid: the form used to push the plans
+          down the page, so the click that asked to see it also hid what the
+          visitor was comparing. */}
+      <Modal
+        open={talkingToSales}
+        onClose={() => setTalkingToSales(false)}
+        label="Talk to us about Enterprise"
+      >
+        <ContactSales source="pricing_page" chrome="plain" />
+      </Modal>
 
       <div className="inline" style={{ marginBottom: 20 }}>
         <span className="muted">Billing period</span>
@@ -187,12 +194,29 @@ export default function PricingPage() {
                   <button className="primary" onClick={() => setTalkingToSales(true)}>
                     Contact sales
                   </button>
+                ) : subscribed && plan.tier === "free" ? (
+                  // "Downgrade to Free" is cancelling, and cancelling has a
+                  // confirmation step that names the date access ends. Send them
+                  // to it rather than describing it here.
+                  <Link className="btn" href="/billing">
+                    Cancel subscription
+                  </Link>
                 ) : subscribed ? (
                   // An existing subscriber changes plan in Stripe's portal, where
                   // proration is handled. A second checkout would create a second
                   // subscription, and the API refuses it with a 409.
-                  <button onClick={manage} disabled={busy !== null}>
-                    {busy === "portal" ? "Opening…" : "Change in portal"}
+                  //
+                  // Labelled by what it does to *their* plan. "Change in portal"
+                  // named the mechanism and left the customer to work out whether
+                  // this was the more expensive plan or the cheaper one.
+                  <button
+                    onClick={manage}
+                    disabled={busy !== null}
+                    title="Opens Stripe's billing portal"
+                  >
+                    {busy === "portal"
+                      ? "Opening…"
+                      : `${isUpgrade ? "Upgrade" : "Downgrade"} to ${plan.display_name}`}
                   </button>
                 ) : plan.purchasable ? (
                   <button

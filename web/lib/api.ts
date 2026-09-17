@@ -134,6 +134,11 @@ export function cancelSubscription() {
   return request<SubscriptionSummary>("/v1/billing/cancel", { method: "POST" });
 }
 
+/** Undo a pending cancellation, before the period ends. */
+export function resumeSubscription() {
+  return request<SubscriptionSummary>("/v1/billing/resume", { method: "POST" });
+}
+
 export function openPortal() {
   return request<{ portal_url: string }>("/v1/billing/portal", { method: "POST" });
 }

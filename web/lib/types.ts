@@ -67,6 +67,8 @@ export interface Discount {
 export interface SubscriptionSummary {
   tier: Tier;
   status: string;
+  /** Which price they are on, so the billing page can show what they pay. */
+  billing_interval: Interval | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   discount: Discount | null;

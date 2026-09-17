@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import Banner from "@/components/Banner";
 import { ApiError, getEntitlements, getPlans, sendChat } from "@/lib/api";
@@ -32,6 +32,7 @@ export default function ChatPage() {
   const [blocked, setBlocked] = useState<QuotaExceeded | FeatureNotEntitled | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const paywall = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!ready) return;
@@ -42,6 +43,14 @@ export default function ChatPage() {
       })
       .catch((err: Error) => setError(err.message));
   }, [userId, ready]);
+
+  // A long conversation pushes the paywall off the top of the screen, so the
+  // answer to "why did that not send?" ends up somewhere the person who asked
+  // cannot see. It is sticky (see .paywall), and brought into view when it
+  // changes, for the case where they had already scrolled past it.
+  useEffect(() => {
+    if (blocked) paywall.current?.scrollIntoView({ block: "nearest" });
+  }, [blocked]);
 
   // Every model the product offers, not just the ones this tier can use --
   // locked options have to be visible for the paywall to mean anything.
@@ -116,6 +125,9 @@ export default function ChatPage() {
         </Banner>
       )}
 
+      {/* role=alert so it is announced, not merely drawn, and one wrapper for
+          both kinds so the sticky offset is the same either way. */}
+      <div className="paywall" ref={paywall} role="alert">
       {blocked?.error === "feature_not_entitled" && (
         <Banner tone="warn">
           <div className="row">
@@ -148,6 +160,7 @@ export default function ChatPage() {
           </div>
         </Banner>
       )}
+      </div>
 
       <div className="card">
         {turns.length > 0 && (

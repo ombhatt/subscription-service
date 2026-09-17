@@ -147,3 +147,46 @@ test.describe("contacting sales", () => {
     expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });
+
+test.describe("the contact form is a dialog", () => {
+  test("it opens over the plans instead of pushing them down", async ({ page }) => {
+    const api = new FakeApi();
+    await mockApi(page, api);
+    await page.goto("/");
+
+    const plans = page.locator(".card.plan");
+    // Position in the *document*, not the viewport: opening a modal moves focus
+    // into it and the browser may scroll, which changes the viewport position
+    // of everything without moving anything on the page.
+    const topInDocument = () =>
+      plans.first().evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY));
+    const before = await topInDocument();
+
+    await page.getByRole("button", { name: "Contact sales" }).click();
+
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByLabel("Work email")).toBeVisible();
+    expect(await topInDocument()).toBe(before);
+  });
+
+  test("Escape closes it", async ({ page }) => {
+    await mockApi(page, new FakeApi());
+    await page.goto("/");
+    await page.getByRole("button", { name: "Contact sales" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(page.getByRole("dialog")).toBeHidden();
+  });
+
+  test("so does the close button", async ({ page }) => {
+    await mockApi(page, new FakeApi());
+    await page.goto("/");
+    await page.getByRole("button", { name: "Contact sales" }).click();
+
+    await page.getByRole("button", { name: "Close" }).click();
+
+    await expect(page.getByRole("dialog")).toBeHidden();
+  });
+});
