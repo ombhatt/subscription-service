@@ -281,6 +281,27 @@ ending it early is a refund conversation. Refunds are manual from the
 Stripe dashboard; automating them before you understand your own fraud patterns
 is premature.
 
+### Sharing a Stripe account
+
+A Stripe account can serve more than one application, and this one's does. That
+matters more than it sounds: webhooks are delivered per *account*, the
+reconciliation job lists every subscription in the account, and other people's
+customers carry `metadata.user_id` too -- the very key this service resolves an
+unknown customer by. Left alone, a neighbouring product's subscriber becomes a
+row in this database, and the nightly job re-syncs it forever.
+
+So ownership is decided by the **price**: a subscription is ours when its price
+resolves to one of our tiers, either because it is configured or because it
+carries the `tier` metadata the seed script stamps. Anything else is ignored --
+never written, counted in `reconcile.finished` as `ignored` rather than as
+drift. An existing local row is never dropped by this rule; it only applies
+before a row exists, so a subscriber on a price we have since retired is still
+ours to mirror.
+
+Neater still is one Stripe account per application, and that is the right shape
+before going live: it separates webhook traffic, portal configurations and price
+namespaces, and no rule in this repo can be got wrong.
+
 ## Connecting to Postgres
 
 Supabase offers three routes and they are not interchangeable.

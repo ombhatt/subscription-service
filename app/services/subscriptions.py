@@ -172,6 +172,33 @@ def resolve_tier(price: dict | None) -> tuple[Tier | None, BillingInterval | Non
     return None, interval
 
 
+def belongs_to_this_service(remote: dict | None) -> bool:
+    """Whether a Stripe subscription is one of ours.
+
+    One Stripe account can serve several applications -- this one shares its
+    account with another product, and *its* customers carry `metadata.user_id`
+    too, which is the join key this service resolves unknown customers by. So
+    "the customer names a user" is not enough to claim a subscription: it would
+    attach a stranger's subscription to a row in this database, and our nightly
+    reconcile would then keep re-syncing it forever.
+
+    Ownership is the price. A subscription is ours when its price resolves to
+    one of our tiers -- a configured price id, or the `tier` metadata the seed
+    script stamps, which is what keeps grandfathered prices working. Another
+    application's prices resolve to nothing, and are left alone.
+
+    Deliberately not a metadata flag on the *subscription*: those are set at
+    creation time by whoever created it, and a subscription made in the Stripe
+    dashboard would carry none.
+    """
+    if remote is None:
+        # No subscription to attribute. Our own customers get their row at
+        # checkout, so there is nothing here worth inventing one for.
+        return False
+    tier, _ = resolve_tier(stripe_client.subscription_price(remote))
+    return tier is not None
+
+
 # --------------------------------------------------------------------------
 # the one sync function
 # --------------------------------------------------------------------------
@@ -207,9 +234,24 @@ async def sync_subscription_from_stripe(
     customer.
     """
     sub = await _find_by_customer(session, stripe_customer_id, lock=True)
+    remote: dict | None = None
+
     if sub is None:
         # First webhook for this customer, or a customer created outside our
         # checkout. The join key is the metadata we set at creation time.
+        #
+        # Read Stripe before writing anything: with no local row there is no
+        # lock to take, and the answer decides whether this subscription is
+        # ours to record at all.
+        remote = await stripe_client.fetch_current_subscription(stripe_customer_id)
+        if not belongs_to_this_service(remote):
+            log.info(
+                "ignoring %s: no local row and its subscription is not on a price "
+                "this service sells",
+                stripe_customer_id,
+            )
+            return None
+
         customer = await stripe_client.retrieve_customer(stripe_customer_id)
         user_id = (customer.get("metadata") or {}).get("user_id")
         if not user_id:
@@ -240,7 +282,10 @@ async def sync_subscription_from_stripe(
 
     before = audit.snapshot(sub)
     before_fingerprint = _fingerprint(sub)
-    remote = await stripe_client.fetch_current_subscription(stripe_customer_id)
+    if remote is None:
+        # Not fetched above, which means there was a row to lock first. That
+        # order is the point: see the docstring.
+        remote = await stripe_client.fetch_current_subscription(stripe_customer_id)
 
     if remote is None:
         _apply_no_subscription(sub)

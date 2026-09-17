@@ -228,7 +228,7 @@ async def test_the_report_carries_what_the_alert_needs(session, stripe):
     payload = (await reconcile(session, dry_run=True)).as_dict()
 
     assert set(payload) == {
-        "checked", "mismatched", "repaired", "failed", "unknown_customers", "details"
+        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details"
     }
     assert payload["mismatched"] == 1
 
