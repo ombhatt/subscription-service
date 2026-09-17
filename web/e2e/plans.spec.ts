@@ -48,6 +48,9 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
   await pro.getByRole("button", { name: "Upgrade to Pro" }).click();
   await expect.poll(() => api.portalCalls).toBe(1);
   expect(api.checkoutCalls).toBe(0);
+  // The tier travels with the click, so Stripe opens on a confirmation for Pro
+  // rather than on a list the customer has to search.
+  expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "monthly" });
 });
 
 test("the current plan is marked and cannot be re-bought", async ({ page }) => {
@@ -81,4 +84,28 @@ test("a Stripe outage leaves the page usable without amounts", async ({ page }) 
   const pro = page.locator(".plan", { hasText: "Pro" });
   await expect(pro).toContainText("—");
   await expect(pro).toContainText("1,500");
+});
+
+test("the annual toggle travels to the portal too", async ({ page }) => {
+  const api = new FakeApi({ tier: "plus", status: "active", source: "subscription" });
+  await mockApi(page, api);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Annual" }).click();
+  await page.locator(".plan", { hasText: "Pro" }).getByRole("button", { name: "Upgrade to Pro" }).click();
+
+  await expect.poll(() => api.portalCalls).toBe(1);
+  expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "annual" });
+});
+
+test("Manage billing asks for no particular plan", async ({ page }) => {
+  // The billing page's button opens the portal itself, not a plan change.
+  const api = new FakeApi({ tier: "pro", status: "active", source: "subscription" });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  await page.getByRole("button", { name: "Manage billing" }).click();
+
+  await expect.poll(() => api.portalCalls).toBe(1);
+  expect(api.portalBodies[0]).toEqual({});
 });

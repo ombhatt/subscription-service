@@ -221,8 +221,13 @@ class FakeStripe:
                 return sub
         raise AssertionError(f"no such subscription: {subscription_id}")
 
-    async def create_portal_session(self, *, customer_id, return_url):
-        session = {"id": "bps_test", "url": "https://portal.stripe.test/session"}
+    async def create_portal_session(self, *, customer_id, return_url, flow=None):
+        session = {
+            "id": "bps_test",
+            "url": "https://portal.stripe.test/session",
+            "customer_id": customer_id,
+            "flow": flow,
+        }
         self.portal_sessions.append(session)
         return session
 
@@ -287,6 +292,11 @@ class FakeStripe:
             "items": {
                 "data": [
                     {
+                        # Real subscription items carry an id, and the portal's
+                        # deep link needs it. The fake omitted it, so the code
+                        # that reads it looked fine here and raised against
+                        # Stripe.
+                        "id": f"si_{subscription_id}",
                         "current_period_start": period_start,
                         "current_period_end": period_end,
                         "price": {

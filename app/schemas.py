@@ -46,6 +46,17 @@ class CheckoutResponse(BaseModel):
     session_id: str
 
 
+class PortalRequest(BaseModel):
+    """Optional: which plan the customer asked for.
+
+    The portal opens on its home page without this, which is fine for "Manage
+    billing" and wrong for a button that named a tier.
+    """
+
+    tier: Tier | None = None
+    interval: BillingInterval = BillingInterval.MONTHLY
+
+
 class PortalResponse(BaseModel):
     portal_url: str
 

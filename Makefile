@@ -3,7 +3,7 @@
 #   make install PYTHON=/opt/homebrew/bin/python3.12
 PYTHON ?= python3.11
 
-.PHONY: up down services services-down install lock migrate seed run test testclock lint \
+.PHONY: up down services services-down install lock migrate seed portal run test testclock lint \
         coverage coverage-html audit image image-web stack stack-down
 
 up:            ## start postgres + redis in docker
@@ -34,6 +34,9 @@ migrate:
 
 seed:          ## create products/prices in Stripe, prints price ids for .env
 	.venv/bin/python -m scripts.seed_stripe
+
+portal:        ## configure Stripe's customer portal from plans.py, prints its id
+	.venv/bin/python -m scripts.configure_portal
 
 run:
 	.venv/bin/uvicorn app.main:app --reload --port 8000

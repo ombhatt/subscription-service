@@ -1,6 +1,7 @@
 import { accessToken } from "./supabase";
 import type {
   ChatReply,
+  Interval,
   ContactSalesPayload,
   Entitlements,
   Plan,
@@ -139,8 +140,16 @@ export function resumeSubscription() {
   return request<SubscriptionSummary>("/v1/billing/resume", { method: "POST" });
 }
 
-export function openPortal() {
-  return request<{ portal_url: string }>("/v1/billing/portal", { method: "POST" });
+/**
+ * Stripe's hosted portal. With a tier, the session is deep-linked to a
+ * confirmation for that plan -- a button that says "Upgrade to Pro" should not
+ * land on a page where Pro has to be found again.
+ */
+export function openPortal(target?: { tier: string; interval: Interval }) {
+  return request<{ portal_url: string }>("/v1/billing/portal", {
+    method: "POST",
+    body: JSON.stringify(target ?? {}),
+  });
 }
 
 export function sendChat(model: string, message: string) {

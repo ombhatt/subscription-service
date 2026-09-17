@@ -21,6 +21,7 @@ from app.schemas import (
     CheckoutResponse,
     ContactSalesRequest,
     ContactSalesResponse,
+    PortalRequest,
     PortalResponse,
     SubscriptionSummary,
 )
@@ -132,6 +133,7 @@ async def checkout(
 
 @router.post("/portal", response_model=PortalResponse)
 async def portal(
+    body: PortalRequest | None = None,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> PortalResponse:
@@ -139,8 +141,15 @@ async def portal(
 
     All of it is Stripe's hosted portal, which is why this service has no
     billing UI of its own and no proration code.
+
+    With a `tier`, the session is deep-linked to a confirmation for that plan:
+    a button that says "Upgrade to Pro" should land on Pro, not on a list the
+    customer has to search. Which plans the portal will switch between is its
+    *configuration* -- see scripts/configure_portal.py, without which it offers
+    only the plan they already have.
     """
-    url = await open_portal(session, user_id=user.id)
+    target = (body.tier, body.interval) if body and body.tier else None
+    url = await open_portal(session, user_id=user.id, target=target)
     return PortalResponse(portal_url=url)
 
 

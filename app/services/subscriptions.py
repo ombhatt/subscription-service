@@ -513,13 +513,60 @@ async def resume_subscription(session: AsyncSession, *, user_id: str) -> Subscri
     return synced or sub
 
 
-async def open_portal(session: AsyncSession, *, user_id: str, return_url: str | None = None) -> str:
+async def open_portal(
+    session: AsyncSession,
+    *,
+    user_id: str,
+    return_url: str | None = None,
+    target: tuple[Tier, BillingInterval] | None = None,
+) -> str:
+    """A portal URL, deep-linked to one plan change when `target` is given.
+
+    Without it the customer lands on the portal home page and has to find the
+    plan they asked for. With it they land on a confirmation for exactly the
+    tier and interval the button named, showing the proration Stripe will
+    charge -- which is the part this service deliberately does not compute.
+
+    Falls back to the plain portal whenever the deep link cannot be built
+    (no live subscription, a tier with no price). A portal that opens on the
+    wrong page still beats an error.
+    """
     settings = get_settings()
     sub = await get_subscription(session, user_id)
     if sub is None or not sub.stripe_customer_id:
         raise BillingError("no billing account yet -- subscribe first", code=404)
+
+    flow = await _plan_change_flow(sub, target) if target else None
     portal = await stripe_client.create_portal_session(
         customer_id=sub.stripe_customer_id,
         return_url=return_url or settings.portal_return_url,
+        flow=flow,
     )
     return portal["url"]
+
+
+async def _plan_change_flow(sub: Subscription, target: tuple[Tier, BillingInterval]) -> dict | None:
+    """`subscription_update_confirm` for one tier, or None if it cannot be built."""
+    tier, interval = target
+    if not CATALOG[tier].purchasable:
+        return None
+    price_id = price_id_for(tier, interval)
+    if not price_id or not sub.stripe_subscription_id:
+        return None
+    if price_id == sub.stripe_price_id:
+        return None  # already on it; the confirm page would be a no-op
+
+    remote = await stripe_client.fetch_current_subscription(sub.stripe_customer_id)
+    items = ((remote or {}).get("items") or {}).get("data") or []
+    if len(items) != 1:
+        # Stripe only accepts this flow for single-item subscriptions, and every
+        # subscription this service creates has exactly one line.
+        return None
+
+    return {
+        "type": "subscription_update_confirm",
+        "subscription_update_confirm": {
+            "subscription": sub.stripe_subscription_id,
+            "items": [{"id": items[0]["id"], "price": price_id, "quantity": 1}],
+        },
+    }
