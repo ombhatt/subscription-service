@@ -48,7 +48,8 @@ Fill in `.env`:
 Then create the products and prices, and apply the schema:
 
 ```bash
-.venv/bin/python -m scripts.seed_stripe   # prints the price ids for .env
+.venv/bin/python -m scripts.seed_stripe      # prints the price ids for .env
+.venv/bin/python -m scripts.configure_portal # prints the portal id for .env
 .venv/bin/alembic upgrade head
 .venv/bin/uvicorn app.main:app --reload
 ```
@@ -256,6 +257,16 @@ discount becomes a data change rather than a component change.
 Change plan, reactivate, update card, download invoices — all of it is Stripe's
 hosted Customer Portal (`POST /v1/billing/portal`). That is why there is no
 billing UI and no proration code in this repo.
+
+What the portal will *offer*, though, is ours to decide, and it is decided by
+its **configuration** rather than by anything in this repo's runtime.
+`scripts/configure_portal.py` builds one from `plans.py` -- every purchasable
+tier, both intervals -- and `STRIPE_PORTAL_CONFIGURATION_ID` points the service
+at it. Skip that and Stripe uses the account default, which lists no products:
+"Update your subscription" then shows the plan the customer already has and no
+way to reach the other one. Passing a `tier` to `POST /v1/billing/portal` also
+deep-links the session to a confirmation for that plan, so "Upgrade to Pro"
+lands on Pro with its proration rather than on a list.
 
 The exceptions are **cancelling** (`POST /v1/billing/cancel`) and **undoing a
 cancellation** (`POST /v1/billing/resume`), which the app does itself: leaving

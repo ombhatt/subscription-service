@@ -154,11 +154,27 @@ async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> 
     )
 
 
-async def create_portal_session(*, customer_id: str, return_url: str) -> dict:
+async def create_portal_session(
+    *,
+    customer_id: str,
+    return_url: str,
+    flow: dict | None = None,
+) -> dict:
+    """A portal session, optionally deep-linked to a single flow.
+
+    `configuration` is passed whenever one is configured. Without it Stripe uses
+    the account's default, whose switchable-product list is edited in a
+    dashboard nobody reviews -- ours is built from `plans.py` by
+    scripts/configure_portal.py.
+    """
     api = _client()
-    session = await _call(
-        api.billing_portal.Session.create, customer=customer_id, return_url=return_url
-    )
+    settings = get_settings()
+    params: dict[str, Any] = {"customer": customer_id, "return_url": return_url}
+    if settings.stripe_portal_configuration_id:
+        params["configuration"] = settings.stripe_portal_configuration_id
+    if flow:
+        params["flow_data"] = flow
+    session = await _call(api.billing_portal.Session.create, **params)
     return _as_dict(session)
 
 

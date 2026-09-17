@@ -62,18 +62,21 @@ export default function PricingPage() {
     [userId, interval, router],
   );
 
-  const manage = useCallback(async () => {
-    if (!ready) return;
-    setBusy("portal");
-    setError(null);
-    try {
-      const { portal_url } = await openPortal();
-      window.location.href = portal_url;
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-      setBusy(null);
-    }
-  }, [userId, ready]);
+  const manage = useCallback(
+    async (target?: { tier: string; interval: Interval }) => {
+      if (!ready) return;
+      setBusy("portal");
+      setError(null);
+      try {
+        const { portal_url } = await openPortal(target);
+        window.location.href = portal_url;
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : String(err));
+        setBusy(null);
+      }
+    },
+    [userId, ready],
+  );
 
   if (!ready)
     return (
@@ -210,7 +213,10 @@ export default function PricingPage() {
                   // named the mechanism and left the customer to work out whether
                   // this was the more expensive plan or the cheaper one.
                   <button
-                    onClick={manage}
+                    // The tier goes with the click: Stripe then opens on a
+                    // confirmation for this plan, with the proration it will
+                    // charge, rather than on a list of everything.
+                    onClick={() => manage({ tier: plan.tier, interval })}
                     disabled={busy !== null}
                     title="Opens Stripe's billing portal"
                   >

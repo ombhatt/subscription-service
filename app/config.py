@@ -71,6 +71,13 @@ class Settings(BaseSettings):
     # Charge tax through Stripe Tax. Requires an origin address on the account.
     automatic_tax: bool = True
 
+    # The portal decides for itself which plans a subscriber may switch to, and
+    # it only knows what its configuration lists. Unset, the account's default
+    # configuration applies -- which is how "Update your subscription" ended up
+    # offering the plan the customer was already on and nothing else. Create one
+    # from this repo's catalogue with `python -m scripts.configure_portal`.
+    stripe_portal_configuration_id: str = ""
+
     stripe_price_plus_monthly: str = ""
     stripe_price_plus_annual: str = ""
     stripe_price_pro_monthly: str = ""

@@ -157,6 +157,9 @@ SUPABASE_URL=https://<project>.supabase.co
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...            from the endpoint you create, not the CLI
 STRIPE_PRICE_{PLUS,PRO}_{MONTHLY,ANNUAL}=price_...
+STRIPE_PORTAL_CONFIGURATION_ID=bpc_...      from `python -m scripts.configure_portal`;
+                                            unset, the portal offers only the plan
+                                            the customer already has
 CHECKOUT_SUCCESS_URL / CHECKOUT_CANCEL_URL / PORTAL_RETURN_URL
 ```
 
