@@ -614,3 +614,48 @@ main:focus {
     transition: none;
   }
 }
+
+
+/* ---------- sticky paywall ---------- */
+
+/* The paywall is the answer to "why did that not send?", and the conversation
+   above it grows. Pinned, it stays with the question instead of scrolling off
+   the top of a long chat. Empty until something is blocked, so it costs no
+   space otherwise. */
+.paywall {
+  position: sticky;
+  top: 12px;
+  z-index: 5;
+}
+
+/* ---------- modal ---------- */
+
+/* A native <dialog>: the browser brings the focus trap, Escape, inert
+   background and the dialog role. The element itself is only a positioner --
+   the card inside draws the surface. */
+.modal {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: 560px;
+  width: calc(100% - 32px);
+  color: inherit;
+}
+
+.modal::backdrop {
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.modal-body {
+  position: relative;
+  margin: 0;
+}
+
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 2px 10px;
+  font-size: 18px;
+  line-height: 1.4;
+}

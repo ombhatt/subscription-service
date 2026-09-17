@@ -37,11 +37,17 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
   await mockApi(page, api);
   await page.goto("/");
 
-  await expect(page.getByRole("button", { name: /Upgrade to/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Change in portal" })).toHaveCount(2);
+  // Labelled by what happens to *their* plan. "Change in portal" named the
+  // mechanism and left the customer to work out which direction they were going.
+  const pro = page.locator(".plan", { hasText: "Pro" });
+  await expect(pro.getByRole("button", { name: "Upgrade to Pro" })).toBeVisible();
+  await expect(
+    page.locator(".plan", { hasText: "Free" }).getByRole("link", { name: "Cancel subscription" }),
+  ).toBeVisible();
 
-  await page.locator(".plan", { hasText: "Pro" }).getByRole("button").click();
+  await pro.getByRole("button", { name: "Upgrade to Pro" }).click();
   await expect.poll(() => api.portalCalls).toBe(1);
+  expect(api.checkoutCalls).toBe(0);
 });
 
 test("the current plan is marked and cannot be re-bought", async ({ page }) => {

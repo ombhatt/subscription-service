@@ -4,28 +4,36 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import Banner from "@/components/Banner";
+import PriceTag from "@/components/PriceTag";
 import QuotaMeter from "@/components/QuotaMeter";
 import {
   ApiError,
   cancelSubscription,
   getEntitlements,
+  getPlans,
   getSubscription,
   openPortal,
+  resumeSubscription,
 } from "@/lib/api";
-import type { Entitlements, SubscriptionSummary } from "@/lib/types";
-import { describeDiscount, formatDate, humanizeKey } from "@/lib/types";
+import type { Entitlements, Interval, Plan, SubscriptionSummary } from "@/lib/types";
+import { describeDiscount, formatDate, humanizeKey, offerFor } from "@/lib/types";
 import { useRequireSession } from "@/lib/user";
 
 export default function BillingPage() {
   const { email, ready } = useRequireSession();
   const [ents, setEnts] = useState<Entitlements | null>(null);
   const [sub, setSub] = useState<SubscriptionSummary | null>(null);
+  // Amounts live in Stripe and reach the frontend through /v1/billing/plans.
+  // The billing page showed what you may do and when it renews, but never what
+  // you pay -- the one number a customer comes here to check.
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Cancelling is irreversible in the sense that matters -- the customer has to
   // go and reactivate -- so it takes two deliberate clicks, not one.
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
 
   useEffect(() => {
     if (!ready) return;
@@ -37,6 +45,9 @@ export default function BillingPage() {
     getSubscription()
       .then(setSub)
       .catch(() => setSub(null));
+    getPlans()
+      .then(setPlans)
+      .catch(() => setPlans([]));
   }, [email, ready]);
 
   const manage = useCallback(async () => {
@@ -70,12 +81,35 @@ export default function BillingPage() {
     }
   }, []);
 
+  const resume = useCallback(async () => {
+    setResuming(true);
+    setError(null);
+    try {
+      setSub(await resumeSubscription());
+      setEnts(await getEntitlements());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setResuming(false);
+    }
+  }, []);
+
   if (!ready || (!ents && !error))
     return (
       <p className="muted" role="status">
         Loading…
       </p>
     );
+
+  // What they pay, for the interval they actually bought, with any promotion
+  // code applied -- the same Offer the pricing page renders, so a discount
+  // stays a data change rather than a second code path.
+  const interval: Interval = (sub?.billing_interval as Interval | null) ?? "monthly";
+  const currentPlan = plans.find((plan) => plan.tier === ents?.tier);
+  const offer =
+    ents?.source === "subscription" && currentPlan
+      ? offerFor(currentPlan.prices[interval], interval, sub?.discount ?? null)
+      : null;
 
   return (
     <>
@@ -103,9 +137,22 @@ export default function BillingPage() {
 
           {ents.cancel_at_period_end && (
             <Banner tone="warn">
-              <strong>Subscription ending.</strong> You keep {ents.display_name} until{" "}
-              {formatDate(ents.current_period_end)}, then move to Free. You can reactivate in
-              the portal any time before then.
+              <div className="row">
+                <span>
+                  <strong>Subscription ending.</strong> You keep {ents.display_name} until{" "}
+                  {formatDate(ents.current_period_end)}, then move to Free.
+                </span>
+                {/* "You can reactivate in the portal" was an instruction, not a
+                    control: it named a place and left the customer to find it. */}
+                <button
+                  className="btn"
+                  onClick={resume}
+                  disabled={resuming}
+                  aria-busy={resuming}
+                >
+                  {resuming ? "Resuming…" : "Resume subscription"}
+                </button>
+              </div>
             </Banner>
           )}
 
@@ -135,6 +182,11 @@ export default function BillingPage() {
                     {ents.status}
                   </span>
                 </h2>
+                {offer && (
+                  <div style={{ marginBottom: 6 }}>
+                    <PriceTag offer={offer} />
+                  </div>
+                )}
                 <p className="muted" style={{ margin: 0 }}>
                   {ents.source === "subscription"
                     ? ents.cancel_at_period_end

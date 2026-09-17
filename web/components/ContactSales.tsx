@@ -22,9 +22,12 @@ import type { ContactSalesPayload } from "@/lib/types";
 export default function ContactSales({
   source,
   onDone,
+  chrome = "card",
 }: {
   source: ContactSalesPayload["source"];
   onDone?: () => void;
+  /** "plain" when something else already draws the surface -- a modal, say. */
+  chrome?: "card" | "plain";
 }) {
   // The submit is deliberately not called "Contact sales": that is the name of
   // the button that opens this form, and two controls sharing an accessible
@@ -70,7 +73,10 @@ export default function ContactSales({
   }
 
   return (
-    <div className="card" style={{ maxWidth: 520 }}>
+    <div
+      className={chrome === "card" ? "card" : undefined}
+      style={chrome === "card" ? { maxWidth: 520 } : undefined}
+    >
       <h2 style={{ marginTop: 0 }}>Talk to us about Enterprise</h2>
       <p className="muted">
         Custom limits, invoicing and a contract. Tell us how to reach you and we&apos;ll

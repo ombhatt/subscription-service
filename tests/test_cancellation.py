@@ -114,3 +114,55 @@ async def test_a_free_user_has_nothing_to_cancel(client, stripe):
 
 async def test_cancelling_needs_a_session(client, stripe):
     assert (await client.post("/v1/billing/cancel")).status_code == 401
+
+
+# --------------------------------------------------------------------------
+# changing their mind
+# --------------------------------------------------------------------------
+
+
+async def test_resuming_before_the_boundary_keeps_the_subscription(client, stripe):
+    await subscribe(client, stripe)
+    await client.post("/v1/billing/cancel", headers=USER)
+    assert (await client.get("/v1/entitlements", headers=USER)).json()["cancel_at_period_end"]
+
+    response = await client.post("/v1/billing/resume", headers=USER)
+
+    assert response.status_code == 200
+    assert response.json()["cancel_at_period_end"] is False
+    assert response.json()["tier"] == "pro"
+    ents = (await client.get("/v1/entitlements", headers=USER)).json()
+    assert ents["cancel_at_period_end"] is False, "the cached answer must have been dropped"
+
+
+async def test_resuming_a_subscription_that_was_never_cancelled_changes_nothing(client, stripe):
+    await subscribe(client, stripe)
+    calls_before = stripe.cancel_calls
+
+    response = await client.post("/v1/billing/resume", headers=USER)
+
+    assert response.status_code == 200
+    assert response.json()["cancel_at_period_end"] is False
+    assert stripe.cancel_calls == calls_before, "nothing to undo, so nothing to ask Stripe"
+
+
+async def test_there_is_nothing_to_resume_once_the_period_has_ended(client, stripe):
+    customer = await subscribe(client, stripe)
+    await client.post("/v1/billing/cancel", headers=USER)
+    stripe.subscriptions.pop(customer)
+    await client.post(
+        "/v1/webhooks/stripe",
+        content=json.dumps(
+            {
+                "id": "evt_end",
+                "type": "customer.subscription.deleted",
+                "data": {"object": {"customer": customer}},
+            }
+        ),
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+
+    response = await client.post("/v1/billing/resume", headers=USER)
+
+    assert response.status_code == 404
+    assert "subscribe again" in response.json()["detail"]

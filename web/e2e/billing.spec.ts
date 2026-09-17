@@ -66,7 +66,9 @@ test("a cancelled subscription says when access ends", async ({ page }) => {
   const banner = page.locator(".banner.warn");
   await expect(banner).toContainText("Subscription ending");
   await expect(banner).toContainText("Oct 3, 2026");
-  await expect(banner).toContainText("reactivate");
+  // Undoing it is a control in the banner, not an instruction to go and find
+  // Stripe's portal.
+  await expect(banner.getByRole("button", { name: "Resume subscription" })).toBeVisible();
 });
 
 test("a comped account is labelled as granted", async ({ page }) => {
@@ -178,4 +180,69 @@ test("a plan already ending offers no cancel button", async ({ page }) => {
   await page.goto("/billing");
 
   await expect(page.getByRole("button", { name: "Cancel subscription" })).toHaveCount(0);
+});
+
+test("the plan card says what it costs", async ({ page }) => {
+  // The one number a customer opens this page to check, and it was not here.
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  await expect(page.locator(".card").first().locator(".price-now")).toHaveText("$100/mo");
+});
+
+test("a discount is applied to the amount shown, not just described", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+    discount: {
+      coupon_id: "LAUNCH",
+      name: "Launch",
+      percent_off: 25,
+      amount_off: null,
+      currency: null,
+      duration: "forever",
+      duration_in_months: null,
+      promotion_code: "LAUNCH25",
+      ends_at: null,
+    },
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  const card = page.locator(".card").first();
+  await expect(card.locator(".price-now")).toHaveText("$75/mo");
+  await expect(card.locator(".price-was")).toHaveText("$100");
+});
+
+test("a pending cancellation can be undone from the banner", async ({ page }) => {
+  const api = new FakeApi({
+    tier: "pro",
+    status: "active",
+    source: "subscription",
+    cancelAtPeriodEnd: true,
+    currentPeriodEnd: "2026-10-03T00:00:00Z",
+  });
+  await mockApi(page, api);
+  await page.goto("/billing");
+
+  const banner = page.locator(".banner.warn");
+  await expect(banner).toContainText("Subscription ending");
+  // The old copy said "you can reactivate in the portal" -- an instruction, not
+  // a control.
+  await expect(banner).not.toContainText("in the portal");
+
+  await banner.getByRole("button", { name: "Resume subscription" }).click();
+
+  await expect(page.locator(".banner.warn")).toHaveCount(0);
+  await expect(page.getByText(/Renews Oct 3, 2026/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel subscription" })).toBeVisible();
+  expect(api.resumeCalls).toBe(1);
 });

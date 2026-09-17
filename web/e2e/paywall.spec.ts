@@ -86,3 +86,26 @@ test("locked models are visible but labelled", async ({ page }) => {
   await expect(options.nth(1)).toHaveText("large (locked)");
   await expect(options.nth(2)).toHaveText("reasoning (locked)");
 });
+
+test("the paywall stays on screen through a long conversation", async ({ page, api }) => {
+  // It used to render above the chat log: send enough messages and the reason
+  // your last one failed scrolled off the top of the page.
+  await page.goto("/chat");
+
+  for (let i = 0; i < 12; i++) {
+    await page.getByPlaceholder("Say something…").fill(`message ${i}`);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.locator(".bubble.them")).toHaveCount(i + 1);
+  }
+
+  await page.locator("select").selectOption("reasoning");
+  await page.getByPlaceholder("Say something…").fill("and now a locked model");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const banner = page.locator(".banner.warn");
+  await expect(banner).toBeVisible();
+
+  await page.mouse.wheel(0, 2000);
+  await expect(banner).toBeInViewport();
+  expect(api.state.messagesUsed).toBe(12);
+});

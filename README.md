@@ -200,7 +200,9 @@ A fourth tier that is deliberately unlike the others: no published price, no
 self-serve checkout, and access delivered by a manual grant against a contract
 negotiated out of band. `TierDefinition.purchasable` says so, which is why the
 pricing page renders "Custom" and a **Contact sales** button rather than a
-price and a Buy button.
+price and a Buy button. The button opens the inquiry form in a modal dialog --
+rendered above the grid, it pushed the plans down the page, so the click that
+asked to see it also hid what the visitor was there to compare.
 
 That flag replaced a rule that read `tier is not Tier.FREE`. It was correct
 right up until a second unpurchasable tier existed, at which point it would
@@ -255,8 +257,11 @@ Change plan, reactivate, update card, download invoices — all of it is Stripe'
 hosted Customer Portal (`POST /v1/billing/portal`). That is why there is no
 billing UI and no proration code in this repo.
 
-The one exception is **cancelling**, which `POST /v1/billing/cancel` does
-in-app: leaving is the thing a customer should never have to hunt for. It sets
+The exceptions are **cancelling** (`POST /v1/billing/cancel`) and **undoing a
+cancellation** (`POST /v1/billing/resume`), which the app does itself: leaving
+is the thing a customer should never have to hunt for, and an app that makes
+leaving easy and coming back hard has only moved the friction somewhere less
+honest. Cancel sets
 `cancel_at_period_end` through Stripe and re-reads, so the mirror still has one
 writer, and access is unchanged until the boundary -- the
 `customer.subscription.deleted` webhook is what moves them to free. Cancelling
@@ -289,7 +294,7 @@ A Next.js + TypeScript frontend lives in [`web/`](web) and is what
 |---|---|
 | `/` | pricing — limits from `plans.py`, amounts from Stripe, both via `/v1/billing/plans` |
 | `/login` | sign in or sign up |
-| `/billing` | live entitlements, quota meters, dunning and cancellation banners, any discount, cancel (two-step), portal link |
+| `/billing` | live entitlements, **what you pay**, quota meters, dunning and cancellation banners, any discount, cancel (two-step), resume, portal link |
 | `/billing/success` | where Stripe returns; **polls** until the webhook grants, and says so if it never does |
 | `/chat` | a metered endpoint rendering both paywalls: 403 locked model, 429 out of quota |
 

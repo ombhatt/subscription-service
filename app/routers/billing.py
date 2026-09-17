@@ -28,6 +28,7 @@ from app.services.entitlements import commit_and_invalidate, resolve_entitlement
 from app.services.subscriptions import (
     get_or_create_subscription,
     open_portal,
+    resume_subscription,
     schedule_cancellation,
     start_checkout,
 )
@@ -169,6 +170,22 @@ async def my_subscription(
 ) -> SubscriptionSummary:
     sub = await get_or_create_subscription(session, user.id)
     await session.commit()
+    return _summary(sub)
+
+
+@router.post("/resume", response_model=SubscriptionSummary)
+async def resume(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SubscriptionSummary:
+    """Undo a pending cancellation.
+
+    Paired with /cancel deliberately. An app that makes leaving easy and coming
+    back hard has only moved the friction somewhere less honest, and "reactivate
+    in the portal" is not a call to action anyone can follow.
+    """
+    sub = await resume_subscription(session, user_id=user.id)
+    await commit_and_invalidate(session)
     return _summary(sub)
 
 

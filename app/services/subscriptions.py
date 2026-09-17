@@ -486,6 +486,33 @@ async def schedule_cancellation(session: AsyncSession, *, user_id: str) -> Subsc
     return synced or sub
 
 
+async def resume_subscription(session: AsyncSession, *, user_id: str) -> Subscription:
+    """Undo a pending cancellation, before the period ends.
+
+    The mirror image of `schedule_cancellation`, and here for the same reason:
+    someone who changes their mind should not have to find Stripe's portal to
+    say so. Nothing is charged by this -- the subscription was always going to
+    renew on the same date; it simply stops being scheduled to stop.
+
+    Only valid while the cancellation is still pending. Once the boundary has
+    passed there is no subscription left to resume, and Stripe requires a new
+    checkout -- which is a different flow with a different price.
+    """
+    sub = await get_subscription(session, user_id)
+    if sub is None or not sub.stripe_subscription_id:
+        raise BillingError("no subscription to resume -- subscribe again", code=404)
+    if not sub.cancel_at_period_end:
+        return sub  # already renewing; nothing to undo
+
+    await stripe_client.set_cancel_at_period_end(sub.stripe_subscription_id, False)
+    synced = await sync_subscription_from_stripe(
+        session,
+        stripe_customer_id=sub.stripe_customer_id,
+        reason="customer.resumed",
+    )
+    return synced or sub
+
+
 async def open_portal(session: AsyncSession, *, user_id: str, return_url: str | None = None) -> str:
     settings = get_settings()
     sub = await get_subscription(session, user_id)
