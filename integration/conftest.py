@@ -262,13 +262,41 @@ class Clock:
 
     def advance_past_renewal(self, subscription_id: str) -> None:
         """Advance just past this subscription's period end, and past the window
-        in which the renewal invoice is still a draft."""
+        in which the renewal invoice is still a draft, then wait for the outcome.
+
+        `ready` means Stripe's time has moved, not that the renewal charge has
+        been attempted: read too early and a subscription with a declining card
+        is still `active`. So wait for the charge, or for a cancelling
+        subscription to end.
+        """
         sub = _as_dict(stripe.Subscription.retrieve(subscription_id))
         from app.stripe_client import subscription_period
 
         _, period_end = subscription_period(sub)
         assert period_end, "subscription has no period end to advance past"
         self.advance_to(period_end + DRAFT_WINDOW_S)
+
+        if sub["cancel_at_period_end"]:
+            self._wait_for(
+                subscription_id, "the subscription to end", lambda s: s["status"] == "canceled"
+            )
+        else:
+            before = sub["latest_invoice"]
+
+            def charged(s: dict) -> bool:
+                invoice = s["latest_invoice"]
+                return bool(invoice) and invoice["id"] != before and invoice["attempted"]
+
+            self._wait_for(subscription_id, "the renewal to be charged", charged)
+
+    def _wait_for(self, subscription_id: str, what: str, done) -> None:
+        deadline = time.time() + ADVANCE_TIMEOUT_S
+        while time.time() < deadline:
+            sub = _as_dict(stripe.Subscription.retrieve(subscription_id, expand=["latest_invoice"]))
+            if done(sub):
+                return
+            time.sleep(1)
+        raise AssertionError(f"timed out after {ADVANCE_TIMEOUT_S}s waiting for {what}")
 
     def close(self) -> None:
         try:
