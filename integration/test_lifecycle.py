@@ -118,6 +118,7 @@ async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, 
     clock.set_payment_method(customer["id"], "pm_card_chargeCustomerFail")
     clock.advance_past_renewal(subscription["id"])
     sub = await sync(session, customer["id"])
+    assert sub.status == SubscriptionStatus.PAST_DUE.value
     assert sub.tier == "pro"
 
     # Age the window past its limit, the only way our own policy can be moved.
