@@ -228,9 +228,266 @@ async def test_the_report_carries_what_the_alert_needs(session, stripe):
     payload = (await reconcile(session, dry_run=True)).as_dict()
 
     assert set(payload) == {
-        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details"
+        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details",
+        "orphaned", "orphaned_closed", "notified", "unnotified",
     }
     assert payload["mismatched"] == 1
+
+
+# --------------------------------------------------------------------------
+# reconcile: subscriptions whose Supabase account has been deleted
+# --------------------------------------------------------------------------
+
+
+class Accounts:
+    """An account directory in which the given users have been deleted."""
+
+    def __init__(self, deleted=(), *, can_tell=True):
+        self.deleted = set(deleted)
+        self.can_tell = can_tell
+
+    async def missing(self, session, user_ids):
+        if not self.can_tell:
+            return None
+        return {u for u in user_ids if u in self.deleted}
+
+
+class Outbox:
+    """A notifier that keeps what it was asked to send, or refuses to send."""
+
+    def __init__(self, *, down=False):
+        self.sent: list[tuple[str, str]] = []
+        self.down = down
+
+    async def send(self, subject, body):
+        if self.down:
+            raise ConnectionError("smtp is down")
+        self.sent.append((subject, body))
+
+
+def paying(stripe, customer_id="cus_1", user_id="u1", subscription_id="sub_1", **kwargs):
+    stripe.customers[customer_id] = {"id": customer_id, "metadata": {"user_id": user_id}}
+    return stripe.set_subscription(customer_id, price_id="price_pro_m",
+                                   subscription_id=subscription_id, **kwargs)
+
+
+async def test_a_deleted_accounts_subscription_is_reported_not_resynced(session, stripe):
+    sub = await seed(session, tier=Tier.FREE.value)
+    paying(stripe, status="active", cancel_at_period_end=True)
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
+
+    [orphan] = report.orphaned
+    assert {k: orphan[k] for k in ("user_id", "stripe_customer_id", "stripe_subscription_id",
+                                    "status", "cancel_at_period_end")} == {
+        "user_id": "u1",
+        "stripe_customer_id": "cus_1",
+        "stripe_subscription_id": "sub_1",
+        "status": "active",
+        "cancel_at_period_end": True,
+    }
+    assert report.mismatched == 0, "an orphan is its own finding, not drift"
+    assert report.repaired == 0
+    assert (await reload(session, sub)).tier == Tier.FREE.value, "nothing is written for it"
+
+
+async def test_an_orphan_is_marked_in_stripe_where_someone_would_act_on_it(session, stripe):
+    await seed(session)
+    remote = paying(stripe)
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
+
+    marked_at = remote["metadata"]["orphaned_at"]
+    assert datetime.fromisoformat(marked_at).tzinfo is not None
+    assert report.orphaned[0]["orphaned_at"] == marked_at
+
+
+async def test_no_row_is_invented_for_a_deleted_account(session, stripe):
+    paying(stripe, customer_id="cus_9", user_id="u9")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
+
+    assert [o["user_id"] for o in report.orphaned] == ["u9"]
+    assert report.unknown_customers == [], "it is not a customer to sync"
+    rows = (await session.execute(select(Subscription))).scalars().all()
+    assert rows == []
+
+
+async def test_the_user_is_found_on_the_subscription_when_the_customer_lacks_it(session, stripe):
+    # Checkout stamps user_id on the subscription; the customer may not have it.
+    stripe.customers["cus_9"] = {"id": "cus_9", "metadata": {}}
+    stripe.set_subscription("cus_9", status="active", price_id="price_pro_m")
+    stripe.subscriptions["cus_9"]["metadata"] = {"user_id": "u9"}
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
+
+    assert [o["user_id"] for o in report.orphaned] == ["u9"]
+
+
+async def test_an_ended_subscription_of_a_deleted_account_is_only_counted(session, stripe):
+    await seed(session)  # a cancelled subscription mirrors as free
+    remote = paying(stripe, status="canceled")
+    outbox = Outbox()
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=outbox)
+
+    assert report.orphaned == [], "nothing can be charged, so nothing to act on"
+    assert report.orphaned_closed == 1
+    assert outbox.sent == [] and "orphaned_at" not in remote.get("metadata", {})
+
+
+async def test_a_live_account_in_the_same_run_is_still_repaired(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    await seed(session, user_id="u2", stripe_customer_id="cus_2", tier=Tier.FREE.value)
+    paying(stripe)
+    paying(stripe, customer_id="cus_2", user_id="u2", subscription_id="sub_2")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
+
+    assert [o["user_id"] for o in report.orphaned] == ["u1"]
+    assert report.repaired == 1
+    query = select(Subscription).where(Subscription.user_id == "u2")
+    u2 = (await session.execute(query)).scalar_one()
+    assert u2.tier == Tier.PRO.value
+
+
+async def test_cannot_tell_is_never_read_as_deleted(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    remote = paying(stripe)
+    remote["metadata"] = {"orphaned_at": "2026-09-01T00:00:00+00:00"}
+
+    report = await reconcile(
+        session, accounts=Accounts(deleted={"u1"}, can_tell=False), notifier=Outbox()
+    )
+
+    assert report.orphaned == []
+    assert report.repaired == 1, "without an answer, reconcile behaves as it always did"
+    assert remote["metadata"]["orphaned_at"], "and leaves any earlier mark alone"
+
+
+async def test_a_mark_on_an_account_that_exists_is_cleared(session, stripe):
+    await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
+    remote = paying(stripe)
+    remote["metadata"] = {"user_id": "u1", "orphaned_at": "2026-09-01T00:00:00+00:00",
+                          "orphan_notified_at": "2026-09-01T00:00:05+00:00"}
+
+    await reconcile(session, accounts=Accounts(deleted=set()), notifier=Outbox())
+
+    assert remote["metadata"] == {"user_id": "u1"}, "only our two keys are removed"
+
+
+async def test_orphans_are_reported_on_a_dry_run_without_marking_or_email(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    remote = paying(stripe)
+    outbox = Outbox()
+
+    report = await reconcile(session, dry_run=True, accounts=Accounts(deleted={"u1"}),
+                             notifier=outbox)
+
+    assert len(report.orphaned) == 1
+    assert "orphaned_at" not in remote.get("metadata", {})
+    assert outbox.sent == []
+
+
+# --------------------------------------------------------------------------
+# reconcile: telling someone about orphans
+# --------------------------------------------------------------------------
+
+
+async def test_new_orphans_are_emailed_once_in_a_single_message(session, stripe):
+    await seed(session)
+    await seed(session, user_id="u2", stripe_customer_id="cus_2")
+    paying(stripe)
+    paying(stripe, customer_id="cus_2", user_id="u2", subscription_id="sub_2",
+           cancel_at_period_end=True)
+    outbox = Outbox()
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1", "u2"}), notifier=outbox)
+
+    [(subject, body)] = outbox.sent
+    assert "2 subscriptions are still charging a deleted account" in subject
+    assert "sub_1: active, renews" in body
+    assert "sub_2: active, cancels at period end" in body
+    links = [line.strip() for line in body.splitlines() if line.strip().startswith("https://")]
+    assert links[0] == "https://dashboard.stripe.com/test/subscriptions/sub_1"
+    assert sorted(report.notified) == ["sub_1", "sub_2"]
+    assert report.unnotified == []
+
+
+async def test_an_orphan_already_emailed_about_is_not_emailed_again(session, stripe):
+    await seed(session)
+    remote = paying(stripe)
+    outbox = Outbox()
+    accounts = Accounts(deleted={"u1"})
+
+    await reconcile(session, accounts=accounts, notifier=outbox)
+    assert remote["metadata"]["orphan_notified_at"]
+    second = await reconcile(session, accounts=accounts, notifier=outbox)
+
+    assert len(outbox.sent) == 1
+    assert len(second.orphaned) == 1, "still reported every night until it ends"
+    assert second.notified == [] and second.unnotified == []
+
+
+async def test_without_email_configured_the_orphan_is_left_unnotified(session, stripe):
+    await seed(session)
+    remote = paying(stripe)
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=None)
+
+    assert report.unnotified == ["sub_1"]
+    assert "orphaned_at" in remote["metadata"], "the Stripe mark does not depend on email"
+    assert "orphan_notified_at" not in remote["metadata"]
+
+
+async def test_a_failed_send_is_retried_on_the_next_run(session, stripe):
+    await seed(session)
+    remote = paying(stripe)
+    accounts = Accounts(deleted={"u1"})
+
+    first = await reconcile(session, accounts=accounts, notifier=Outbox(down=True))
+    assert first.unnotified == ["sub_1"]
+    assert "orphan_notified_at" not in remote["metadata"], "never marked for an unsent email"
+
+    outbox = Outbox()
+    second = await reconcile(session, accounts=accounts, notifier=outbox)
+    assert len(outbox.sent) == 1 and second.notified == ["sub_1"]
+
+
+async def test_a_webhook_does_not_bring_a_deleted_account_back(session, stripe):
+    """Marking an orphan in Stripe fires customer.subscription.updated, and a
+    webhook for a customer with no row used to create one."""
+    from app.services.subscriptions import sync_subscription_from_stripe
+
+    paying(stripe, customer_id="cus_9", user_id="u9")
+    await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
+
+    # The webhook the mark just fired. No account lookup on this path.
+    result = await sync_subscription_from_stripe(session, stripe_customer_id="cus_9")
+
+    assert result is None
+    assert (await session.execute(select(Subscription))).scalars().all() == []
+
+
+async def test_an_unmarked_new_subscriber_is_synced_without_asking_about_accounts(
+    session, stripe
+):
+    """The grant path must not depend on the account lookup: CI's users are not
+    real Supabase accounts, and a misconfigured lookup would lock out every new
+    subscriber."""
+    from app.services.subscriptions import sync_subscription_from_stripe
+
+    paying(stripe, customer_id="cus_9", user_id="u9")
+
+    row = await sync_subscription_from_stripe(session, stripe_customer_id="cus_9")
+
+    assert row is not None and row.tier == Tier.PRO.value
+
+
+async def test_the_default_directory_cannot_tell_on_sqlite(session):
+    from app.accounts import SupabaseAccounts
+
+    assert await SupabaseAccounts().missing(session, ["u1"]) is None
 
 
 # ==========================================================================
@@ -434,6 +691,47 @@ async def test_reconcile_main_fails_the_process_when_a_repair_failed(
     finished = [r for r in caplog.records if getattr(r, "context", {}).get(
         "event") == "reconcile.finished"]
     assert finished and finished[0].context["failed"] == 1
+
+
+async def test_reconcile_main_reports_orphans_on_the_line_the_alert_watches(
+    session, stripe, monkeypatch, caplog
+):
+    from app.jobs import reconcile as job
+
+    await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
+    paying(stripe)
+    outbox = Outbox()
+
+    monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
+    monkeypatch.setattr(job, "email_notifier", lambda: outbox)
+    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
+    monkeypatch.setattr(job, "dispose_engine", _noop)
+    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+
+    with caplog.at_level("INFO"):
+        assert await job.main() == 0, "an orphan someone was told about is a clean run"
+
+    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
+        "event") == "reconcile.finished"]
+    assert finished[0].context["orphaned"] == 1
+    assert finished[0].context["notified"] == 1
+    assert any("ORPHANED" in r.getMessage() and "sub_1" in r.getMessage()
+               for r in caplog.records if r.levelname == "ERROR")
+
+
+async def test_reconcile_main_fails_when_nobody_could_be_told(session, stripe, monkeypatch):
+    from app.jobs import reconcile as job
+
+    await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
+    paying(stripe)
+
+    monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
+    monkeypatch.setattr(job, "email_notifier", lambda: None)
+    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
+    monkeypatch.setattr(job, "dispose_engine", _noop)
+    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+
+    assert await job.main() == 1, "an orphan nobody was told about must not look like a clean run"
 
 
 async def test_expire_grace_main_reports_what_it_revoked(session, monkeypatch, caplog):

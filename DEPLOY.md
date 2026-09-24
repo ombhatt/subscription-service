@@ -143,6 +143,32 @@ made before it. The process still exits 1 when `failed` is non-empty, so the
 scheduler shows the run as failed and the customers it names are still on the
 wrong tier.
 
+### Orphaned subscriptions
+
+Reconcile also finds **orphaned** subscriptions: Stripe can still charge them,
+but the Supabase account they belong to has been deleted. Nothing in the service
+cancels or refunds them; a person decides. So reconcile:
+
+1. writes nothing for them, and the webhook handler will not create a row for one;
+2. marks each in Stripe with `metadata.orphaned_at`, where someone would go to
+   cancel or refund it;
+3. emails `ALERT_EMAIL_TO` once, listing every new orphan in one message, then
+   marks each `metadata.orphan_notified_at`. That mark is set only after the SMTP
+   server accepts the message, so a failed send is retried the next night;
+4. logs `ORPHANED:` and carries `orphaned`, `notified` and `unnotified` on
+   `reconcile.finished`, every night until the subscription ends.
+
+**The run exits 1 when an orphan could not be emailed**, whether SMTP is not
+configured or delivery failed. A red scheduled run is the fallback when email
+cannot deliver. An orphan that was emailed is a clean run.
+
+If a marked subscription's account turns out to exist, for example after a
+`user_id` is corrected, reconcile removes both marks, so a later deletion is
+reported afresh.
+
+The check needs migration 0006. Without it, every customer fails the check and
+the run exits 1, which the migrate-before-roll order above already prevents.
+
 ## Configuration
 
 Required everywhere:
@@ -161,6 +187,11 @@ STRIPE_PORTAL_CONFIGURATION_ID=bpc_...      from `python -m scripts.configure_po
                                             unset, the portal offers only the plan
                                             the customer already has
 CHECKOUT_SUCCESS_URL / CHECKOUT_CANCEL_URL / PORTAL_RETURN_URL
+SMTP_HOST=...                              operator email; see "Orphaned subscriptions"
+SMTP_PORT=587                              587 = STARTTLS, 465 = TLS from the start
+SMTP_USERNAME / SMTP_PASSWORD
+ALERT_EMAIL_FROM=billing@yourdomain        a sender your provider has verified
+ALERT_EMAIL_TO=ops@yourdomain,...          comma-separated
 ```
 
 Optional, with defaults that are safe but conservative:

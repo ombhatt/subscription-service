@@ -29,6 +29,10 @@ from app.services.entitlements import mark_entitlements_stale
 
 log = logging.getLogger(__name__)
 
+# Stripe metadata the reconcile job puts on a subscription whose Supabase
+# account has been deleted. Read here so a webhook never re-creates that user.
+ORPHANED_AT = "orphaned_at"
+
 # Stripe's vocabulary -> ours. Anything unlisted is treated as no paid access.
 STATUS_MAP: dict[str, SubscriptionStatus] = {
     "active": SubscriptionStatus.ACTIVE,
@@ -256,6 +260,19 @@ async def sync_subscription_from_stripe(
         user_id = (customer.get("metadata") or {}).get("user_id")
         if not user_id:
             log.error("stripe customer %s has no user_id metadata; skipping", stripe_customer_id)
+            return None
+
+        if (remote.get("metadata") or {}).get(ORPHANED_AT):
+            # Reconcile found this subscriber's account deleted and marked the
+            # subscription -- and the mark itself fires the webhook that lands
+            # here. Creating a row would bring back a user nobody can sign in
+            # as. The mark, not an account lookup, decides: this path grants
+            # paid access, and must not depend on reading Supabase's auth data.
+            log.warning(
+                "ignoring %s: marked orphaned (Supabase account %s deleted)",
+                stripe_customer_id,
+                user_id,
+            )
             return None
 
         # There is no row to lock yet, so the burst of events that follows a

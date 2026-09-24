@@ -221,6 +221,19 @@ class FakeStripe:
                 return sub
         raise AssertionError(f"no such subscription: {subscription_id}")
 
+    async def set_subscription_metadata(self, subscription_id, metadata):
+        """Stripe's semantics: keys merge, and an empty string removes one."""
+        for sub in self.subscriptions.values():
+            if sub["id"] == subscription_id:
+                current = sub.setdefault("metadata", {})
+                for key, value in metadata.items():
+                    if value == "":
+                        current.pop(key, None)
+                    else:
+                        current[key] = value
+                return sub
+        raise AssertionError(f"no such subscription: {subscription_id}")
+
     async def create_portal_session(self, *, customer_id, return_url, flow=None):
         session = {
             "id": "bps_test",
@@ -322,6 +335,7 @@ def stripe(monkeypatch) -> FakeStripe:
         "create_checkout_session",
         "create_portal_session",
         "set_cancel_at_period_end",
+        "set_subscription_metadata",
         "list_subscriptions_page",
         "retrieve_charge",
         "retrieve_price",

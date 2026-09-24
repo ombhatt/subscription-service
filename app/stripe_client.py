@@ -154,6 +154,16 @@ async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> 
     )
 
 
+async def set_subscription_metadata(subscription_id: str, metadata: dict[str, str]) -> dict:
+    """Merge keys into a subscription's metadata. An empty string removes a key.
+
+    Stripe merges rather than replaces, so keys this service does not own --
+    `user_id`, or anything a person added in the Dashboard -- are left alone.
+    """
+    api = _client()
+    return _as_dict(await _call(api.Subscription.modify, subscription_id, metadata=metadata))
+
+
 async def create_portal_session(
     *,
     customer_id: str,
