@@ -37,6 +37,7 @@ from app.observability import configure_logging, reconciliation_drift
 from app.observability import event as log_event
 from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import (
+    ORPHANED_AT,
     STATUS_MAP,
     belongs_to_this_service,
     resolve_tier,
@@ -53,7 +54,6 @@ CLOSED_STATUSES = frozenset({"canceled", "incomplete_expired"})
 # go to cancel or refund it. The first says when reconcile found it; the second,
 # when the email about it was accepted -- set only then, so a failed or
 # unconfigured send is retried the next night instead of lost.
-ORPHANED_AT = "orphaned_at"
 NOTIFIED_AT = "orphan_notified_at"
 
 

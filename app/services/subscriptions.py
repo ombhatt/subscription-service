@@ -18,7 +18,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
-from app.accounts import AccountDirectory, SupabaseAccounts
 from app.config import get_settings
 from app.errors import BillingError
 from app.models import PAID_STATUSES, Subscription, SubscriptionStatus
@@ -30,9 +29,9 @@ from app.services.entitlements import mark_entitlements_stale
 
 log = logging.getLogger(__name__)
 
-# Asked before a row is created for a customer we have never seen. A module
-# attribute so tests can stand in a directory with deleted users.
-accounts: AccountDirectory = SupabaseAccounts()
+# Stripe metadata the reconcile job puts on a subscription whose Supabase
+# account has been deleted. Read here so a webhook never re-creates that user.
+ORPHANED_AT = "orphaned_at"
 
 # Stripe's vocabulary -> ours. Anything unlisted is treated as no paid access.
 STATUS_MAP: dict[str, SubscriptionStatus] = {
@@ -263,14 +262,14 @@ async def sync_subscription_from_stripe(
             log.error("stripe customer %s has no user_id metadata; skipping", stripe_customer_id)
             return None
 
-        missing = await accounts.missing(session, [user_id])
-        if missing is not None and user_id in missing:
-            # A deleted account's subscription. Creating a row would bring the
-            # user back as a subscriber nobody can sign in as. Reconcile reports
-            # these (`orphaned`); marking one in Stripe fires the very webhook
-            # that lands here.
+        if (remote.get("metadata") or {}).get(ORPHANED_AT):
+            # Reconcile found this subscriber's account deleted and marked the
+            # subscription -- and the mark itself fires the webhook that lands
+            # here. Creating a row would bring back a user nobody can sign in
+            # as. The mark, not an account lookup, decides: this path grants
+            # paid access, and must not depend on reading Supabase's auth data.
             log.warning(
-                "ignoring %s: its Supabase account %s no longer exists",
+                "ignoring %s: marked orphaned (Supabase account %s deleted)",
                 stripe_customer_id,
                 user_id,
             )

@@ -408,7 +408,8 @@ async def test_new_orphans_are_emailed_once_in_a_single_message(session, stripe)
     assert "2 subscriptions are still charging a deleted account" in subject
     assert "sub_1: active, renews" in body
     assert "sub_2: active, cancels at period end" in body
-    assert "dashboard.stripe.com/" in body and "subscriptions/sub_1" in body
+    links = [line.strip() for line in body.splitlines() if line.strip().startswith("https://")]
+    assert links[0] == "https://dashboard.stripe.com/test/subscriptions/sub_1"
     assert sorted(report.notified) == ["sub_1", "sub_2"]
     assert report.unnotified == []
 
@@ -453,20 +454,34 @@ async def test_a_failed_send_is_retried_on_the_next_run(session, stripe):
     assert len(outbox.sent) == 1 and second.notified == ["sub_1"]
 
 
-async def test_a_webhook_does_not_bring_a_deleted_account_back(session, stripe, monkeypatch):
+async def test_a_webhook_does_not_bring_a_deleted_account_back(session, stripe):
     """Marking an orphan in Stripe fires customer.subscription.updated, and a
     webhook for a customer with no row used to create one."""
-    from app.services import subscriptions
+    from app.services.subscriptions import sync_subscription_from_stripe
 
     paying(stripe, customer_id="cus_9", user_id="u9")
-    monkeypatch.setattr(subscriptions, "accounts", Accounts(deleted={"u9"}))
+    await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
 
-    result = await subscriptions.sync_subscription_from_stripe(
-        session, stripe_customer_id="cus_9"
-    )
+    # The webhook the mark just fired. No account lookup on this path.
+    result = await sync_subscription_from_stripe(session, stripe_customer_id="cus_9")
 
     assert result is None
     assert (await session.execute(select(Subscription))).scalars().all() == []
+
+
+async def test_an_unmarked_new_subscriber_is_synced_without_asking_about_accounts(
+    session, stripe
+):
+    """The grant path must not depend on the account lookup: CI's users are not
+    real Supabase accounts, and a misconfigured lookup would lock out every new
+    subscriber."""
+    from app.services.subscriptions import sync_subscription_from_stripe
+
+    paying(stripe, customer_id="cus_9", user_id="u9")
+
+    row = await sync_subscription_from_stripe(session, stripe_customer_id="cus_9")
+
+    assert row is not None and row.tier == Tier.PRO.value
 
 
 async def test_the_default_directory_cannot_tell_on_sqlite(session):
