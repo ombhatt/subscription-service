@@ -228,9 +228,128 @@ async def test_the_report_carries_what_the_alert_needs(session, stripe):
     payload = (await reconcile(session, dry_run=True)).as_dict()
 
     assert set(payload) == {
-        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details"
+        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details",
+        "orphaned", "orphaned_closed",
     }
     assert payload["mismatched"] == 1
+
+
+# --------------------------------------------------------------------------
+# reconcile: subscriptions whose Supabase account has been deleted
+# --------------------------------------------------------------------------
+
+
+class Accounts:
+    """An account directory in which the given users have been deleted."""
+
+    def __init__(self, deleted=(), *, can_tell=True):
+        self.deleted = set(deleted)
+        self.can_tell = can_tell
+
+    async def missing(self, session, user_ids):
+        if not self.can_tell:
+            return None
+        return {u for u in user_ids if u in self.deleted}
+
+
+async def test_a_deleted_accounts_subscription_is_reported_not_resynced(session, stripe):
+    sub = await seed(session, tier=Tier.FREE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m",
+                            cancel_at_period_end=True, subscription_id="sub_1")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}))
+
+    assert report.orphaned == [{
+        "user_id": "u1",
+        "stripe_customer_id": "cus_1",
+        "stripe_subscription_id": "sub_1",
+        "status": "active",
+        "cancel_at_period_end": True,
+    }]
+    assert report.mismatched == 0, "an orphan is its own finding, not drift"
+    assert report.repaired == 0
+    assert (await reload(session, sub)).tier == Tier.FREE.value, "nothing is written for it"
+
+
+async def test_no_row_is_invented_for_a_deleted_account(session, stripe):
+    stripe.customers["cus_9"] = {"id": "cus_9", "metadata": {"user_id": "u9"}}
+    stripe.set_subscription("cus_9", status="active", price_id="price_pro_m")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u9"}))
+
+    assert [o["user_id"] for o in report.orphaned] == ["u9"]
+    assert report.unknown_customers == [], "it is not a customer to sync"
+    rows = (await session.execute(select(Subscription))).scalars().all()
+    assert rows == []
+
+
+async def test_the_user_is_found_on_the_subscription_when_the_customer_lacks_it(session, stripe):
+    # Checkout stamps user_id on the subscription; the customer may not have it.
+    stripe.customers["cus_9"] = {"id": "cus_9", "metadata": {}}
+    stripe.set_subscription("cus_9", status="active", price_id="price_pro_m")
+    stripe.subscriptions["cus_9"]["metadata"] = {"user_id": "u9"}
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u9"}))
+
+    assert [o["user_id"] for o in report.orphaned] == ["u9"]
+
+
+async def test_an_ended_subscription_of_a_deleted_account_is_only_counted(session, stripe):
+    await seed(session)  # a cancelled subscription mirrors as free
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="canceled", price_id="price_pro_m")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}))
+
+    assert report.orphaned == [], "nothing can be charged, so nothing to act on"
+    assert report.orphaned_closed == 1
+
+
+async def test_a_live_account_in_the_same_run_is_still_repaired(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    await seed(session, user_id="u2", stripe_customer_id="cus_2", tier=Tier.FREE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.customers["cus_2"] = {"id": "cus_2", "metadata": {"user_id": "u2"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m",
+                            subscription_id="sub_1")
+    stripe.set_subscription("cus_2", status="active", price_id="price_pro_m",
+                            subscription_id="sub_2")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}))
+
+    assert [o["user_id"] for o in report.orphaned] == ["u1"]
+    assert report.repaired == 1
+    query = select(Subscription).where(Subscription.user_id == "u2")
+    u2 = (await session.execute(query)).scalar_one()
+    assert u2.tier == Tier.PRO.value
+
+
+async def test_cannot_tell_is_never_read_as_deleted(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+
+    report = await reconcile(session, accounts=Accounts(deleted={"u1"}, can_tell=False))
+
+    assert report.orphaned == []
+    assert report.repaired == 1, "without an answer, reconcile behaves as it always did"
+
+
+async def test_orphans_are_reported_on_a_dry_run(session, stripe):
+    await seed(session, tier=Tier.FREE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+
+    report = await reconcile(session, dry_run=True, accounts=Accounts(deleted={"u1"}))
+
+    assert len(report.orphaned) == 1
+
+
+async def test_the_default_directory_cannot_tell_on_sqlite(session):
+    from app.accounts import SupabaseAccounts
+
+    assert await SupabaseAccounts().missing(session, ["u1"]) is None
 
 
 # ==========================================================================
@@ -434,6 +553,31 @@ async def test_reconcile_main_fails_the_process_when_a_repair_failed(
     finished = [r for r in caplog.records if getattr(r, "context", {}).get(
         "event") == "reconcile.finished"]
     assert finished and finished[0].context["failed"] == 1
+
+
+async def test_reconcile_main_reports_orphans_on_the_line_the_alert_watches(
+    session, stripe, monkeypatch, caplog
+):
+    from app.jobs import reconcile as job
+
+    await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m",
+                            subscription_id="sub_1")
+
+    monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
+    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
+    monkeypatch.setattr(job, "dispose_engine", _noop)
+    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+
+    with caplog.at_level("INFO"):
+        await job.main()
+
+    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
+        "event") == "reconcile.finished"]
+    assert finished[0].context["orphaned"] == 1
+    assert any("ORPHANED" in r.getMessage() and "sub_1" in r.getMessage()
+               for r in caplog.records if r.levelname == "ERROR")
 
 
 async def test_expire_grace_main_reports_what_it_revoked(session, monkeypatch, caplog):

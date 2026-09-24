@@ -5,6 +5,11 @@ The only question is whether you find out before the customer does. This job
 walks every subscription Stripe knows about, compares it to the local row, and
 re-syncs anything that disagrees.
 
+It also finds subscriptions whose Supabase account has been deleted but which
+Stripe can still charge, and lists them in `orphaned` instead of re-syncing
+them: there is no one left to grant access to, and whether to cancel or refund
+is a person's decision, not this job's.
+
 Run nightly, and alert on a non-zero `mismatched` count or a non-zero exit (the
 process exits 1 when any customer could not be repaired):
     python -m app.jobs.reconcile
@@ -20,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
+from app.accounts import AccountDirectory, SupabaseAccounts
 from app.db import dispose_engine, get_sessionmaker
 from app.models import PAID_STATUSES, Subscription
 from app.observability import configure_logging, reconciliation_drift
@@ -33,6 +39,10 @@ from app.services.subscriptions import (
 )
 
 log = logging.getLogger(__name__)
+
+# Stripe statuses that can no longer take money. Anything else can still renew,
+# retry a card or collect an open invoice.
+CLOSED_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
 
 @dataclass
@@ -49,6 +59,14 @@ class ReconcileReport:
     ignored: int = 0
     unknown_customers: list[str] = field(default_factory=list)
     details: list[dict] = field(default_factory=list)
+    # Our subscriptions whose Supabase account no longer exists and which Stripe
+    # can still charge: someone deleted in the dashboard, still paying. Nothing
+    # is written for them. Each needs a person to decide: cancel, refund, or
+    # restore the account.
+    orphaned: list[dict] = field(default_factory=list)
+    # The same, for subscriptions that have already ended. History, not a
+    # problem, so counted rather than listed.
+    orphaned_closed: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -59,10 +77,17 @@ class ReconcileReport:
             "ignored": self.ignored,
             "unknown_customers": self.unknown_customers,
             "details": self.details,
+            "orphaned": self.orphaned,
+            "orphaned_closed": self.orphaned_closed,
         }
 
 
-async def reconcile(session: AsyncSession, *, dry_run: bool = False) -> ReconcileReport:
+async def reconcile(
+    session: AsyncSession,
+    *,
+    dry_run: bool = False,
+    accounts: AccountDirectory | None = None,
+) -> ReconcileReport:
     """Walk every subscription in Stripe and repair local rows that disagree.
 
     One transaction per customer. `sync_subscription_from_stripe` holds a row
@@ -72,8 +97,12 @@ async def reconcile(session: AsyncSession, *, dry_run: bool = False) -> Reconcil
     exception anywhere rolled back every repair made before it. Now a failure
     costs only its own customer: rolled back, logged, listed in `failed`, and
     the run moves on.
+
+    `accounts` answers whether a subscriber's Supabase account still exists;
+    the default asks the database (migration 0006).
     """
     report = ReconcileReport()
+    accounts = accounts or SupabaseAccounts()
     starting_after: str | None = None
 
     while True:
@@ -92,7 +121,7 @@ async def reconcile(session: AsyncSession, *, dry_run: bool = False) -> Reconcil
 
             try:
                 repaired = await _reconcile_one(
-                    session, remote, customer_id, report, dry_run=dry_run
+                    session, remote, customer_id, report, accounts, dry_run=dry_run
                 )
                 if dry_run:
                     # Nothing was written. Ending the read keeps no transaction
@@ -124,6 +153,7 @@ async def _reconcile_one(
     remote: dict,
     customer_id: str,
     report: ReconcileReport,
+    accounts: AccountDirectory,
     *,
     dry_run: bool,
 ) -> bool:
@@ -137,6 +167,13 @@ async def _reconcile_one(
         # Another application's subscription in a shared Stripe account. Not
         # drift, not an unknown customer of ours, and nothing to repair.
         report.ignored += 1
+        return False
+
+    user_id = local.user_id if local is not None else await _user_id_of(remote, customer_id)
+    if user_id and await _account_is_gone(session, accounts, user_id):
+        # Re-syncing would write a row for someone who cannot sign in -- or,
+        # with no row yet, invent one -- and do it again every night.
+        _record_orphan(report, remote, customer_id, user_id)
         return False
 
     if local is None:
@@ -186,6 +223,41 @@ async def _reconcile_one(
     return True
 
 
+async def _user_id_of(remote: dict, customer_id: str) -> str | None:
+    """The Supabase user a subscription we have no row for belongs to.
+
+    Checkout stamps it on the subscription; a customer created some other way
+    carries it only on the customer, which costs a Stripe call.
+    """
+    user_id = (remote.get("metadata") or {}).get("user_id")
+    if user_id:
+        return user_id
+    customer = await stripe_client.retrieve_customer(customer_id)
+    return (customer.get("metadata") or {}).get("user_id")
+
+
+async def _account_is_gone(session: AsyncSession, accounts: AccountDirectory, user_id: str) -> bool:
+    missing = await accounts.missing(session, [user_id])
+    # None is "cannot tell", and cannot-tell must never read as deleted.
+    return missing is not None and user_id in missing
+
+
+def _record_orphan(report: ReconcileReport, remote: dict, customer_id: str, user_id: str) -> None:
+    status = remote.get("status", "")
+    if status in CLOSED_STATUSES:
+        report.orphaned_closed += 1
+        return
+    report.orphaned.append(
+        {
+            "user_id": user_id,
+            "stripe_customer_id": customer_id,
+            "stripe_subscription_id": remote.get("id"),
+            "status": status,
+            "cancel_at_period_end": bool(remote.get("cancel_at_period_end")),
+        }
+    )
+
+
 async def main() -> int:
     from app.config import get_settings
 
@@ -206,6 +278,8 @@ async def main() -> int:
         repaired=report.repaired,
         failed=len(report.failed),
         unknown_customers=len(report.unknown_customers),
+        orphaned=len(report.orphaned),
+        orphaned_closed=report.orphaned_closed,
     )
     if report.mismatched:
         log.error("DRIFT: %d subscription(s) disagreed with Stripe", report.mismatched)
@@ -215,6 +289,13 @@ async def main() -> int:
             "on the wrong tier: %s",
             len(report.failed),
             ", ".join(report.failed[:20]),
+        )
+    if report.orphaned:
+        log.error(
+            "ORPHANED: %d subscription(s) are still billable but their Supabase account "
+            "no longer exists: %s",
+            len(report.orphaned),
+            ", ".join(str(o["stripe_subscription_id"]) for o in report.orphaned[:20]),
         )
     await dispose_engine()
     # Non-zero only for failures. Drift that was found and repaired is the job

@@ -143,6 +143,14 @@ made before it. The process still exits 1 when `failed` is non-empty, so the
 scheduler shows the run as failed and the customers it names are still on the
 wrong tier.
 
+It also reports **orphaned** subscriptions: Stripe can still charge them, but
+the Supabase account they belong to has been deleted. Reconcile writes nothing
+for them and logs an `ORPHANED:` error naming each subscription. Nothing in the
+service cancels or refunds them, so alert on `orphaned` above zero in
+`reconcile.finished` and have a person decide. The check needs migration 0006.
+Without it, every customer fails the check and the run exits 1, which the
+migrate-before-roll order above already prevents.
+
 ## Configuration
 
 Required everywhere:
