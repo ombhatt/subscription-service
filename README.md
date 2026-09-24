@@ -54,6 +54,16 @@ Then create the products and prices, and apply the schema:
 .venv/bin/uvicorn app.main:app --reload
 ```
 
+Two wizards walk through the parts that happen in someone else's dashboard,
+opening each page and writing what you copy into `.env`:
+
+- `./scripts/setup_sandbox.sh` gives the service a Stripe sandbox of its own:
+  the key, products and prices, portal configuration, webhook secret and CI
+  secrets, then runs the test-clock suite against it.
+- `./scripts/setup_email.sh` sets up the operator alert email (see
+  [DEPLOY.md](DEPLOY.md#orphaned-subscriptions)) through Resend's SMTP relay,
+  and ends by sending a test message.
+
 Redis is optional for a single process — without `REDIS_URL` the cache falls
 back to an in-process dict, which is wrong under more than one worker but fine
 while developing.
