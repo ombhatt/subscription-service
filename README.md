@@ -671,6 +671,14 @@ carries `mismatched` as a field.
 - [ ] **Enable Stripe Tax** and set an origin address, or you are collecting no
       tax at all. You are the merchant of record on Stripe Billing: VAT and
       sales tax registration are yours.
+- [ ] **Turn on Stripe's customer emails.** The service emails customers
+      nothing itself; receipts, failed-payment notices and cancellation emails
+      come from Stripe, and only for the ones you enable. At minimum, turn on
+      successful-payment receipts under Settings → Business → Customer emails,
+      and failed-payment emails under Settings → Billing → Subscriptions and
+      emails, which is also where cancellation emails and renewal, trial and
+      expiring-card reminders are. Sandboxes send almost none of these, so
+      check them in live mode.
 - [ ] **Pin `STRIPE_API_VERSION`** to the version you tested against. Recent
       versions moved the billing period from the subscription onto its items;
       `stripe_client.subscription_period()` reads whichever is present, so an
