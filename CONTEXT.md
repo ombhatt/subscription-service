@@ -99,9 +99,12 @@ renewing, and the only user who could see it or cancel it can no longer sign in.
 `reconcile` finds these through `app_private.missing_accounts` (migration 0006),
 which answers with ids only: the service still cannot read `auth.users`. It
 writes nothing for them: no re-sync, and no row invented for an unknown
-customer. It lists them in `orphaned` for a person to act on. One that has
-already ended (`canceled`, `incomplete_expired`) is only counted, in
-`orphaned_closed`: that is history, not money still moving.
+customer (the webhook handler holds the same line). It lists them in
+`orphaned`, marks each in Stripe (`metadata.orphaned_at`), and emails the
+operator once per subscription (`metadata.orphan_notified_at`, set only after
+the email is accepted). One that has already ended (`canceled`,
+`incomplete_expired`) is only counted, in `orphaned_closed`: that is history,
+not money still moving.
 
 "Cannot tell" is not "deleted". On SQLite, or Postgres without Supabase's auth
 schema, the check answers None, and reconcile behaves as it did before.

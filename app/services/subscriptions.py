@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
+from app.accounts import AccountDirectory, SupabaseAccounts
 from app.config import get_settings
 from app.errors import BillingError
 from app.models import PAID_STATUSES, Subscription, SubscriptionStatus
@@ -28,6 +29,10 @@ from app.services import audit
 from app.services.entitlements import mark_entitlements_stale
 
 log = logging.getLogger(__name__)
+
+# Asked before a row is created for a customer we have never seen. A module
+# attribute so tests can stand in a directory with deleted users.
+accounts: AccountDirectory = SupabaseAccounts()
 
 # Stripe's vocabulary -> ours. Anything unlisted is treated as no paid access.
 STATUS_MAP: dict[str, SubscriptionStatus] = {
@@ -256,6 +261,19 @@ async def sync_subscription_from_stripe(
         user_id = (customer.get("metadata") or {}).get("user_id")
         if not user_id:
             log.error("stripe customer %s has no user_id metadata; skipping", stripe_customer_id)
+            return None
+
+        missing = await accounts.missing(session, [user_id])
+        if missing is not None and user_id in missing:
+            # A deleted account's subscription. Creating a row would bring the
+            # user back as a subscriber nobody can sign in as. Reconcile reports
+            # these (`orphaned`); marking one in Stripe fires the very webhook
+            # that lands here.
+            log.warning(
+                "ignoring %s: its Supabase account %s no longer exists",
+                stripe_customer_id,
+                user_id,
+            )
             return None
 
         # There is no row to lock yet, so the burst of events that follows a

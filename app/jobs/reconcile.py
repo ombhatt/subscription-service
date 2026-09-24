@@ -8,10 +8,12 @@ re-syncs anything that disagrees.
 It also finds subscriptions whose Supabase account has been deleted but which
 Stripe can still charge, and lists them in `orphaned` instead of re-syncing
 them: there is no one left to grant access to, and whether to cancel or refund
-is a person's decision, not this job's.
+is a person's decision, not this job's. Each is marked in Stripe and emailed to
+the operator once.
 
 Run nightly, and alert on a non-zero `mismatched` count or a non-zero exit (the
-process exits 1 when any customer could not be repaired):
+process exits 1 when any customer could not be repaired, or an orphan could not
+be emailed):
     python -m app.jobs.reconcile
 """
 
@@ -20,14 +22,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
 from app.accounts import AccountDirectory, SupabaseAccounts
+from app.config import get_settings
 from app.db import dispose_engine, get_sessionmaker
 from app.models import PAID_STATUSES, Subscription
+from app.notify import Notifier, email_notifier
 from app.observability import configure_logging, reconciliation_drift
 from app.observability import event as log_event
 from app.services.entitlements import commit_and_invalidate
@@ -43,6 +48,13 @@ log = logging.getLogger(__name__)
 # Stripe statuses that can no longer take money. Anything else can still renew,
 # retry a card or collect an open invoice.
 CLOSED_STATUSES = frozenset({"canceled", "incomplete_expired"})
+
+# Written to an orphaned subscription's metadata in Stripe, where someone would
+# go to cancel or refund it. The first says when reconcile found it; the second,
+# when the email about it was accepted -- set only then, so a failed or
+# unconfigured send is retried the next night instead of lost.
+ORPHANED_AT = "orphaned_at"
+NOTIFIED_AT = "orphan_notified_at"
 
 
 @dataclass
@@ -67,6 +79,10 @@ class ReconcileReport:
     # The same, for subscriptions that have already ended. History, not a
     # problem, so counted rather than listed.
     orphaned_closed: int = 0
+    # Subscription ids emailed about this run, and those that still need an
+    # email because sending failed or is not configured. The latter fail the run.
+    notified: list[str] = field(default_factory=list)
+    unnotified: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -79,6 +95,8 @@ class ReconcileReport:
             "details": self.details,
             "orphaned": self.orphaned,
             "orphaned_closed": self.orphaned_closed,
+            "notified": self.notified,
+            "unnotified": self.unnotified,
         }
 
 
@@ -87,6 +105,7 @@ async def reconcile(
     *,
     dry_run: bool = False,
     accounts: AccountDirectory | None = None,
+    notifier: Notifier | None = None,
 ) -> ReconcileReport:
     """Walk every subscription in Stripe and repair local rows that disagree.
 
@@ -99,7 +118,9 @@ async def reconcile(
     the run moves on.
 
     `accounts` answers whether a subscriber's Supabase account still exists;
-    the default asks the database (migration 0006).
+    the default asks the database (migration 0006). `notifier` is who gets told
+    about orphaned subscriptions; None means nobody is configured, and those
+    orphans are left in `unnotified`.
     """
     report = ReconcileReport()
     accounts = accounts or SupabaseAccounts()
@@ -145,6 +166,8 @@ async def reconcile(
             break
         starting_after = rows[-1]["id"]
 
+    if not dry_run:
+        await _notify(report, notifier)
     return report
 
 
@@ -170,11 +193,18 @@ async def _reconcile_one(
         return False
 
     user_id = local.user_id if local is not None else await _user_id_of(remote, customer_id)
-    if user_id and await _account_is_gone(session, accounts, user_id):
+    gone = await _account_state(session, accounts, user_id) if user_id else None
+    if gone:
         # Re-syncing would write a row for someone who cannot sign in -- or,
         # with no row yet, invent one -- and do it again every night.
-        _record_orphan(report, remote, customer_id, user_id)
+        await _record_orphan(report, remote, customer_id, user_id, dry_run=dry_run)
         return False
+    if gone is False and _marks(remote) and not dry_run:
+        # Marked once but the account is there: a mistaken mark, or a user_id
+        # corrected since. Cleared, so a later deletion is reported afresh.
+        await stripe_client.set_subscription_metadata(
+            remote["id"], {ORPHANED_AT: "", NOTIFIED_AT: ""}
+        )
 
     if local is None:
         report.unknown_customers.append(customer_id)
@@ -236,17 +266,34 @@ async def _user_id_of(remote: dict, customer_id: str) -> str | None:
     return (customer.get("metadata") or {}).get("user_id")
 
 
-async def _account_is_gone(session: AsyncSession, accounts: AccountDirectory, user_id: str) -> bool:
+async def _account_state(
+    session: AsyncSession, accounts: AccountDirectory, user_id: str
+) -> bool | None:
+    """True if the account is gone, False if it exists, None if we cannot tell."""
     missing = await accounts.missing(session, [user_id])
     # None is "cannot tell", and cannot-tell must never read as deleted.
-    return missing is not None and user_id in missing
+    if missing is None:
+        return None
+    return user_id in missing
 
 
-def _record_orphan(report: ReconcileReport, remote: dict, customer_id: str, user_id: str) -> None:
+def _marks(remote: dict) -> dict:
+    metadata = remote.get("metadata") or {}
+    return {k: metadata[k] for k in (ORPHANED_AT, NOTIFIED_AT) if metadata.get(k)}
+
+
+async def _record_orphan(
+    report: ReconcileReport, remote: dict, customer_id: str, user_id: str, *, dry_run: bool
+) -> None:
     status = remote.get("status", "")
     if status in CLOSED_STATUSES:
         report.orphaned_closed += 1
         return
+    marks = _marks(remote)
+    orphaned_at = marks.get(ORPHANED_AT)
+    if orphaned_at is None and not dry_run:
+        orphaned_at = datetime.now(UTC).isoformat(timespec="seconds")
+        await stripe_client.set_subscription_metadata(remote["id"], {ORPHANED_AT: orphaned_at})
     report.orphaned.append(
         {
             "user_id": user_id,
@@ -254,8 +301,79 @@ def _record_orphan(report: ReconcileReport, remote: dict, customer_id: str, user
             "stripe_subscription_id": remote.get("id"),
             "status": status,
             "cancel_at_period_end": bool(remote.get("cancel_at_period_end")),
+            "orphaned_at": orphaned_at,
+            "notified_at": marks.get(NOTIFIED_AT),
         }
     )
+
+
+async def _notify(report: ReconcileReport, notifier: Notifier | None) -> None:
+    """Email about orphans not yet emailed about, then mark them notified.
+
+    One email per run, listing every new orphan. The mark goes on only after the
+    message is accepted, so nothing is marked notified that nobody was told.
+    """
+    pending = [o for o in report.orphaned if not o["notified_at"]]
+    if not pending:
+        return
+    ids = [o["stripe_subscription_id"] for o in pending]
+    if notifier is None:
+        report.unnotified = ids
+        log.error("ORPHAN EMAIL NOT SENT: alert email is not configured (SMTP_HOST, "
+                  "ALERT_EMAIL_TO, ALERT_EMAIL_FROM)")
+        return
+    try:
+        await notifier.send(*_orphan_email(pending))
+    except Exception:
+        report.unnotified = ids
+        log.exception("ORPHAN EMAIL NOT SENT: delivery failed; will retry next run")
+        return
+
+    sent_at = datetime.now(UTC).isoformat(timespec="seconds")
+    for orphan in pending:
+        sub_id = orphan["stripe_subscription_id"]
+        try:
+            await stripe_client.set_subscription_metadata(sub_id, {NOTIFIED_AT: sent_at})
+        except Exception:
+            # The email went; only the mark failed. Tomorrow's run emails about
+            # this one again, which is the safe way round.
+            log.exception("emailed about %s but could not mark it notified", sub_id)
+        orphan["notified_at"] = sent_at
+        report.notified.append(sub_id)
+
+
+def _orphan_email(orphans: list[dict]) -> tuple[str, str]:
+    settings = get_settings()
+    n = len(orphans)
+    subject = (
+        f"[subscription-service/{settings.environment}] "
+        f"{n} subscription{'s are' if n != 1 else ' is'} still charging a deleted account"
+    )
+    dashboard = "https://dashboard.stripe.com/" + (
+        "test/" if settings.stripe_secret_key.startswith("sk_test_") else ""
+    )
+    lines = [
+        "Stripe can still charge the subscriptions below, but the Supabase account",
+        "each belongs to no longer exists, so nobody can sign in to use or cancel it.",
+        "",
+        "Decide for each: cancel it, refund it, or restore the account.",
+        "",
+    ]
+    for o in orphans:
+        ending = "cancels at period end" if o["cancel_at_period_end"] else "renews"
+        lines += [
+            f"- {o['stripe_subscription_id']}: {o['status']}, {ending}",
+            f"  customer {o['stripe_customer_id']}, user {o['user_id']}, "
+            f"found {o['orphaned_at']}",
+            f"  {dashboard}subscriptions/{o['stripe_subscription_id']}",
+            "",
+        ]
+    lines += [
+        "Each is marked in Stripe (metadata orphaned_at, orphan_notified_at), and",
+        "this is the only email about it. The nightly reconcile log keeps listing",
+        "it under ORPHANED until it ends.",
+    ]
+    return subject, "\n".join(lines)
 
 
 async def main() -> int:
@@ -263,7 +381,7 @@ async def main() -> int:
 
     configure_logging(json_logs=get_settings().log_json)
     async with get_sessionmaker()() as session:
-        report = await reconcile(session)
+        report = await reconcile(session, notifier=email_notifier())
 
     reconciliation_drift.set(report.mismatched)
     # The alertable signal. This runs in its own process, so a Gauge here is
@@ -280,6 +398,8 @@ async def main() -> int:
         unknown_customers=len(report.unknown_customers),
         orphaned=len(report.orphaned),
         orphaned_closed=report.orphaned_closed,
+        notified=len(report.notified),
+        unnotified=len(report.unnotified),
     )
     if report.mismatched:
         log.error("DRIFT: %d subscription(s) disagreed with Stripe", report.mismatched)
@@ -299,8 +419,10 @@ async def main() -> int:
         )
     await dispose_engine()
     # Non-zero only for failures. Drift that was found and repaired is the job
-    # doing its work; a customer it could not repair is the job failing.
-    return 1 if report.failed else 0
+    # doing its work; a customer it could not repair is the job failing. So is
+    # an orphan nobody has been told about: email is how orphans are surfaced,
+    # and a failed run is the fallback when it cannot deliver.
+    return 1 if (report.failed or report.unnotified) else 0
 
 
 if __name__ == "__main__":

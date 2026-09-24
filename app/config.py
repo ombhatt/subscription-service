@@ -99,6 +99,22 @@ class Settings(BaseSettings):
     # wherever a proxy or CDN terminates TLS, or every caller shares one budget.
     trust_proxy_headers: bool = False
 
+    # --- operator alerts ---
+    # Email to whoever acts on billing problems a job finds but must not fix
+    # itself; today, subscriptions still charging a deleted account. Plain SMTP,
+    # so any provider works (Resend, Postmark, SES, Gmail). Unset SMTP_HOST,
+    # ALERT_EMAIL_TO or ALERT_EMAIL_FROM means not configured: reconcile then
+    # exits 1 when it has something to report, rather than dropping it.
+    alert_email_to: str = ""  # comma-separated
+    alert_email_from: str = ""
+    smtp_host: str = ""
+    # 587 with STARTTLS is the common case; 465 means TLS from the first byte.
+    smtp_port: int = 587
+    smtp_starttls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_timeout_seconds: float = 10.0
+
     dunning_grace_days: int = 7
     entitlement_cache_ttl: int = 60
 
