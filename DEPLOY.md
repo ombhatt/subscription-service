@@ -158,6 +158,9 @@ cancels or refunds them; a person decides. So reconcile:
 4. logs `ORPHANED:` and carries `orphaned`, `notified` and `unnotified` on
    `reconcile.finished`, every night until the subscription ends.
 
+For local development, `./scripts/setup_email.sh` writes the SMTP and
+`ALERT_EMAIL_*` settings to `.env` for Resend, and sends a test message.
+
 **The run exits 1 when an orphan could not be emailed**, whether SMTP is not
 configured or delivery failed. A red scheduled run is the fallback when email
 cannot deliver. An orphan that was emailed is a clean run.
