@@ -4,6 +4,8 @@ free -> hits a wall -> checks out -> webhook grants -> uses what they paid for.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.conftest import webhook_event
 
 USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
@@ -90,6 +92,41 @@ async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):
         "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
     )
     assert again.status_code == 409, "plan changes belong in the portal, not a second subscription"
+
+
+@pytest.mark.parametrize("stripe_status", ["active", "trialing", "past_due", "unpaid"])
+async def test_a_second_checkout_is_refused_before_the_webhook_lands(client, stripe, stripe_status):
+    """The local row is a mirror, and it lags Stripe until the webhook is
+    processed. A customer who has paid but whose webhook is late still reads as
+    Free, so the pricing page offers them checkout again -- and a second
+    checkout is a second subscription, both billing, only one visible here."""
+    await client.post(
+        "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
+    )
+    customer = stripe.checkout_sessions[0]["customer_id"]
+    stripe.set_subscription(customer, status=stripe_status, price_id="price_plus_m")
+    # No webhook: this is the window between paying and being told.
+
+    again = await client.post(
+        "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
+    )
+
+    assert again.status_code == 409
+    assert len(stripe.checkout_sessions) == 1, "no second checkout session was created"
+
+
+async def test_checkout_is_allowed_again_once_the_stripe_subscription_has_ended(client, stripe):
+    await client.post(
+        "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
+    )
+    customer = stripe.checkout_sessions[0]["customer_id"]
+    stripe.set_subscription(customer, status="canceled", price_id="price_plus_m")
+
+    again = await client.post(
+        "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
+    )
+
+    assert again.status_code == 200, "a lapsed customer can subscribe again"
 
 
 async def test_cancellation_returns_the_user_to_free(client, stripe):

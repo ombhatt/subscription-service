@@ -19,7 +19,9 @@ def settings(**overrides) -> Settings:
         "alert_email_to": "ops@example.test, cfo@example.test",
         "alert_email_from": "billing@example.test",
     }
-    return Settings(**{**base, **overrides})
+    # No env file: a developer's real .env (e.g. SMTP_USERNAME from
+    # scripts/setup_email.sh) must not leak into what these tests assert.
+    return Settings(_env_file=None, **{**base, **overrides})
 
 
 @pytest.mark.parametrize("missing", ["smtp_host", "alert_email_to", "alert_email_from"])
