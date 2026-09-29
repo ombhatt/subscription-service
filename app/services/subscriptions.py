@@ -464,6 +464,21 @@ async def start_checkout(
             "already subscribed -- use the billing portal to change plan",
             code=409,
         )
+    if sub.stripe_customer_id:
+        # The row is a mirror, and it lags Stripe until the webhook is processed.
+        # A customer who has paid but whose webhook is late -- a lock timeout, a
+        # rotated signing secret, a Stripe incident -- still reads as free above,
+        # and the pricing page offers them checkout again. A second checkout is a
+        # second subscription: both bill, only one shows here, and Cancel reaches
+        # only that one. So ask Stripe. Nothing is written; the webhook or the
+        # nightly reconcile still does that.
+        remote = await stripe_client.fetch_current_subscription(sub.stripe_customer_id)
+        if remote and STATUS_MAP.get(remote.get("status", "")) in PAID_STATUSES:
+            raise BillingError(
+                "You already have a subscription; it can take a minute to appear here. "
+                "Refresh this page, or use Manage billing to change plan.",
+                code=409,
+            )
 
     customer_id = await stripe_client.ensure_customer(
         user_id=user_id, email=email, existing_id=sub.stripe_customer_id
