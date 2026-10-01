@@ -12,7 +12,7 @@ alembic>=1.14
 redis>=5.2
 stripe>=11.1
 python-dotenv>=1.0
-pyjwt[crypto]>=2.10
+pyjwt[crypto]>=2.14  # 2.13 and older: token forgery, CVE-2026-102266 and five more
 prometheus-client>=0.21
 # Feature flags. Evaluation is local against an in-memory snapshot -- the
 # only network call is the background refresh -- so this does not sit in
