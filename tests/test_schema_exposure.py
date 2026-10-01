@@ -113,7 +113,6 @@ def test_the_role_migration_carries_no_credential():
     assert "nologin" in source.lower(), "the role must be created without login"
 
 
-
 class _RecordingOp:
     """Stands in for alembic's `op` as if bound to Postgres, and keeps the SQL."""
 
