@@ -127,6 +127,28 @@ jobs:
             echo "::error::app_service can read auth.users"; exit 1
           fi
 
+      # The migration credential's default search_path is `"$user", public`, so
+      # a schema named `postgres` -- which ci_runner can create -- is searched
+      # first. Planting an alembic_version there used to make migrations re-run
+      # or skip, and send new tables into that schema (see alembic/env.py).
+      - name: Migrations ignore a schema named after their role
+        env:
+          PGPASSWORD: postgres
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions
+        run: |
+          q() { psql -h localhost -U postgres -d subscriptions -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
+          q "create schema postgres;
+             create table postgres.alembic_version (version_num varchar(32) primary key);
+             insert into postgres.alembic_version values ('0001')"
+
+          head=$(alembic heads | awk '{print $1}')
+          current=$(alembic current 2>/dev/null | awk 'NF {v=$1} END {print v}')
+          test "$current" = "$head" || { echo "::error::alembic read the planted version ($current), not $head"; exit 1; }
+
+          ran=$(alembic upgrade head 2>&1 | grep "Running upgrade" || true)
+          test -z "$ran" || { echo "::error::migrations re-ran from the planted version: $ran"; exit 1; }
+          q "drop schema postgres cascade"
+
   web:
     name: web
     runs-on: ubuntu-latest
