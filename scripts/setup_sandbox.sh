@@ -199,6 +199,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 PY="$REPO_ROOT/.venv/bin/python"
 ENV_FILE="$REPO_ROOT/.env"
+# Read before stage 2 replaces it: stage 7 needs the old sandbox's key to tell
+# that sandbox's rows apart from everyone else's.
+OLD_STRIPE_KEY=$(_existing STRIPE_SECRET_KEY || true)
 
 banner "A Stripe sandbox for subscription-service"
 
@@ -327,47 +330,25 @@ pause
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
 stage "Old rows in the dev database (optional)"
-say "Your development database holds subscription rows whose Stripe customer"
-say "ids live in the OLD sandbox. Nothing in the new one will ever match them."
-warn "This includes the subscribers you created while testing: their customers"
-warn "and subscriptions stay in the old sandbox, so the rows here are stale."
-OLD_ROWS=$("$PY" - <<'PY' || true
-import asyncio
-import asyncpg
-from dotenv import dotenv_values
-
-async def main():
-    dsn = dotenv_values(".env")["DATABASE_URL"].replace("postgresql+asyncpg", "postgresql")
-    conn = await asyncpg.connect(dsn, statement_cache_size=0)
-    print(await conn.fetchval("select count(*) from subscriptions where stripe_customer_id is not null"))
-    await conn.close()
-
-asyncio.run(main())
-PY
-)
-say "Rows carrying a Stripe customer id: ${OLD_ROWS}"
-note "Rows without a customer id are ordinary free accounts, never touched."
-note "Declining is safe: stale rows simply never match, and the service now"
-note "ignores subscriptions that are not on one of its own prices."
-if [[ "${OLD_ROWS:-0}" != "0" ]] && confirm "Delete those ${OLD_ROWS} row(s)?"; then
-  "$PY" - <<'PY'
-import asyncio
-import asyncpg
-from dotenv import dotenv_values
-
-async def main():
-    dsn = dotenv_values(".env")["DATABASE_URL"].replace("postgresql+asyncpg", "postgresql")
-    conn = await asyncpg.connect(dsn, statement_cache_size=0)
-    before = await conn.fetchval("select count(*) from subscriptions")
-    await conn.execute("delete from subscriptions where stripe_customer_id is not null")
-    after = await conn.fetchval("select count(*) from subscriptions")
-    print(f"  deleted {before - after} row(s); {after} left")
-    await conn.close()
-
-asyncio.run(main())
-PY
+say "Rows created while testing against the old sandbox name customers the new"
+say "one has never heard of. Nothing will ever match them, so this is tidying."
+note "A row is a candidate only if the OLD sandbox's key can find its customer."
+note "A test key cannot see live customers, so paying subscribers never match,"
+note "even when .env points at the database the deployed service uses."
+if [[ -z "$OLD_STRIPE_KEY" || "$OLD_STRIPE_KEY" == "$STRIPE_SECRET_KEY" ]]; then
+  say "There was no earlier key in .env to check rows against, so nothing to do."
+  note "To tidy later, see scripts/prune_sandbox_rows.py."
 else
-  say "Left alone."
+  say "Asking the old sandbox about each row's customer (read-only)..."
+  REPORT=$(OLD_STRIPE_SECRET_KEY="$OLD_STRIPE_KEY" "$PY" -m scripts.prune_sandbox_rows) || true
+  printf '%s\n' "$REPORT" | grep -v '^old_sandbox_rows=' || true
+  OLD_ROWS=$(printf '%s\n' "$REPORT" | sed -n 's/^old_sandbox_rows=//p')
+  if [[ -n "$OLD_ROWS" && "$OLD_ROWS" != "0" ]] && confirm "Delete those ${OLD_ROWS} row(s)?"; then
+    OLD_STRIPE_SECRET_KEY="$OLD_STRIPE_KEY" "$PY" -m scripts.prune_sandbox_rows --delete \
+      || warn "Nothing was deleted; the output above says why."
+  else
+    say "Left alone."
+  fi
 fi
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
