@@ -111,3 +111,53 @@ def test_the_role_migration_carries_no_credential():
     offenders = [line.strip() for line in sql_lines if "password" in line.lower()]
     assert not offenders, f"SQL sets a credential: {offenders}"
     assert "nologin" in source.lower(), "the role must be created without login"
+
+
+
+class _RecordingOp:
+    """Stands in for alembic's `op` as if bound to Postgres, and keeps the SQL."""
+
+    def __init__(self):
+        self.sql: list[str] = []
+
+    def execute(self, statement):
+        self.sql.append(str(statement))
+
+    def get_bind(self):
+        return self
+
+    @property
+    def dialect(self):
+        return self
+
+    name = "postgresql"
+
+    def exec_driver_sql(self, statement):
+        return self
+
+    def scalar(self):
+        return None
+
+    def __getattr__(self, _name):  # create_table, add_column, ... are not SQL we check
+        return lambda *args, **kwargs: None
+
+
+def test_the_app_role_cannot_be_redirected_to_a_schema_named_after_it():
+    """The default search_path is `"$user", public`, and ci_runner holds CREATE
+    on the database, so it can create a schema called `app_service` and grant
+    the role USAGE on it. That schema is then searched *before* `public` for
+    every unqualified table the service queries -- ci_runner's tables answer
+    instead of the real ones. The role's search_path has to be pinned."""
+    recorder = _RecordingOp()
+    for path in sorted(VERSIONS.glob("[0-9]*.py")):
+        module = _load(path)
+        module.op = recorder
+        module.upgrade()
+
+    pins = [
+        sql.strip()
+        for sql in recorder.sql
+        if sql.strip().lower().startswith("alter role app_service set search_path")
+    ]
+    assert pins, "no migration pins app_service's search_path"
+    assert pins[-1].lower() == "alter role app_service set search_path = public"
