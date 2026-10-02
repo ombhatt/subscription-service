@@ -50,6 +50,7 @@ from sqlalchemy.pool import NullPool
 
 from app import stripe_client
 from app.auth import CurrentUser, get_current_user, get_current_user_optional
+from app.billing_provider import PROVIDER_FUNCTIONS, SubscriptionPage
 from app.cache import InMemoryBackend, set_cache
 from app.db import get_session
 from app.main import app
@@ -172,6 +173,12 @@ class FakeStripe:
 
     Tests set `stripe.subscriptions[customer] = {...}` and every code path that
     re-reads Stripe sees it -- which is exactly how the real sync behaves.
+
+    State is kept in Stripe's own shape and handed out through the adapter's
+    real parser, so every test also exercises the translation, and a fake
+    payload Stripe would never send fails here rather than passing quietly.
+    Its methods must match app.billing_provider.BillingProvider, which
+    tests/test_billing_provider.py checks.
     """
 
     def __init__(self) -> None:
@@ -199,16 +206,36 @@ class FakeStripe:
         return customer_id
 
     async def retrieve_customer(self, customer_id):
-        return self.customers.get(customer_id, {"id": customer_id, "metadata": {}})
+        raw = self.customers.get(customer_id, {"id": customer_id, "metadata": {}})
+        return stripe_client.parse_customer(raw)
 
     async def fetch_current_subscription(self, customer_id):
-        return self.subscriptions.get(customer_id)
+        raw = self.subscriptions.get(customer_id)
+        return stripe_client.parse_subscription(raw) if raw else None
 
-    async def create_checkout_session(self, **kwargs):
+    async def create_checkout_session(
+        self,
+        *,
+        customer_id,
+        price_id,
+        user_id,
+        success_url,
+        cancel_url,
+        idempotency_key,
+        trial_period_days=0,
+        promo_code=None,
+    ):
         session = {
             "id": f"cs_test_{len(self.checkout_sessions)}",
             "url": "https://checkout.stripe.test/session",
-            **kwargs,
+            "customer_id": customer_id,
+            "price_id": price_id,
+            "user_id": user_id,
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "idempotency_key": idempotency_key,
+            "trial_period_days": trial_period_days,
+            "promo_code": promo_code,
         }
         self.checkout_sessions.append(session)
         return session
@@ -218,7 +245,7 @@ class FakeStripe:
         for sub in self.subscriptions.values():
             if sub["id"] == subscription_id:
                 sub["cancel_at_period_end"] = bool(value)
-                return sub
+                return
         raise AssertionError(f"no such subscription: {subscription_id}")
 
     async def set_subscription_metadata(self, subscription_id, metadata):
@@ -231,7 +258,7 @@ class FakeStripe:
                         current.pop(key, None)
                     else:
                         current[key] = value
-                return sub
+                return
         raise AssertionError(f"no such subscription: {subscription_id}")
 
     async def create_portal_session(self, *, customer_id, return_url, flow=None):
@@ -259,7 +286,10 @@ class FakeStripe:
             ids = [r["id"] for r in rows]
             start = ids.index(starting_after) + 1 if starting_after in ids else len(rows)
         chunk = rows[start : start + size]
-        return {"data": chunk, "has_more": start + size < len(rows)}
+        return SubscriptionPage(
+            items=[stripe_client.parse_subscription(raw) for raw in chunk],
+            has_more=start + size < len(rows),
+        )
 
     async def retrieve_charge(self, charge_id):
         return {"id": charge_id, "customer": None}
@@ -328,19 +358,9 @@ class FakeStripe:
 @pytest.fixture
 def stripe(monkeypatch) -> FakeStripe:
     fake = FakeStripe()
-    for name in (
-        "ensure_customer",
-        "retrieve_customer",
-        "fetch_current_subscription",
-        "create_checkout_session",
-        "create_portal_session",
-        "set_cancel_at_period_end",
-        "set_subscription_metadata",
-        "list_subscriptions_page",
-        "retrieve_charge",
-        "retrieve_price",
-        "construct_event",
-    ):
+    # Every function the contract names -- not a list kept here by hand, which
+    # once missed a new one and let it call real Stripe with the dummy key.
+    for name in PROVIDER_FUNCTIONS:
         monkeypatch.setattr(stripe_client, name, getattr(fake, name))
     return fake
 
