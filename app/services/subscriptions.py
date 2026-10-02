@@ -179,12 +179,13 @@ def resolve_tier(price: dict | None) -> tuple[Tier | None, BillingInterval | Non
 def belongs_to_this_service(remote: dict | None) -> bool:
     """Whether a Stripe subscription is one of ours.
 
-    One Stripe account can serve several applications -- this one shares its
-    account with another product, and *its* customers carry `metadata.user_id`
-    too, which is the join key this service resolves unknown customers by. So
-    "the customer names a user" is not enough to claim a subscription: it would
-    attach a stranger's subscription to a row in this database, and our nightly
-    reconcile would then keep re-syncing it forever.
+    One Stripe account can serve several applications -- this one shared a
+    sandbox with another product until it got its own, and *that* product's
+    customers carry `metadata.user_id` too, which is the join key this service
+    resolves unknown customers by. So "the customer names a user" is not enough
+    to claim a subscription: it would attach a stranger's subscription to a row
+    in this database, and our nightly reconcile would then keep re-syncing it
+    forever.
 
     Ownership is the price. A subscription is ours when its price resolves to
     one of our tiers -- a configured price id, or the `tier` metadata the seed
