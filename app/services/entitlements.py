@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.cache import get_cache, get_json, set_json
 from app.config import get_settings
-from app.models import PAID_STATUSES, EntitlementGrant, Subscription
+from app.models import EntitlementGrant, Subscription
 from app.observability import entitlement_cache, entitlement_invalidations
 from app.plans import CATALOG, TIER_RANK, Tier, higher_tier, limits_for
 from app.policy import grace_ends_at, grace_expired
@@ -183,10 +183,9 @@ async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any
         period_end = sub.current_period_end
         cancel_at_period_end = sub.cancel_at_period_end
         grace_until = grace_ends_at(sub)
-        paid = sub.status in (s.value for s in PAID_STATUSES)
         # The grace check runs here as well as in the nightly job so a lapsed
         # subscriber does not keep access just because the job has not fired.
-        if paid and not grace_expired(sub):
+        if sub.grants_access and not grace_expired(sub):
             subscription_tier = Tier(sub.tier)
 
     grant_tier = await _active_grant_tier(session, user_id)

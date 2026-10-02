@@ -7,7 +7,7 @@ sync.
 It also, deliberately, no longer writes `subscriptions.tier`.
 
 `subscriptions.tier` is the **mirrored tier** -- what Stripe says this customer
-pays for -- and `_apply_remote` is its only writer. What a customer may
+pays for -- and the sync's `_write` is its only writer. What a customer may
 actually use is the **effective tier**, derived on every read by
 `resolve_entitlements`, which applies `grace_expired` itself. This job writing
 `tier = free` made it a second writer of the mirror, holding a value Stripe had
