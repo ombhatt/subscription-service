@@ -183,9 +183,9 @@ def belongs_to_this_service(remote: dict | None) -> bool:
     sandbox with another product until it got its own, and *that* product's
     customers carry `metadata.user_id` too, which is the join key this service
     resolves unknown customers by. So "the customer names a user" is not enough
-    to claim a subscription: it would
-    attach a stranger's subscription to a row in this database, and our nightly
-    reconcile would then keep re-syncing it forever.
+    to claim a subscription: it would attach a stranger's subscription to a row
+    in this database, and our nightly reconcile would then keep re-syncing it
+    forever.
 
     Ownership is the price. A subscription is ours when its price resolves to
     one of our tiers -- a configured price id, or the `tier` metadata the seed
