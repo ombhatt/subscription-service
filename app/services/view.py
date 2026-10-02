@@ -17,14 +17,14 @@ async def entitlement_view(session: AsyncSession, user_id: str) -> EntitlementRe
     resolved = await resolve_entitlements(session, user_id)
     usage = await quota.states(user_id, resolved)
     return EntitlementResponse(
-        user_id=resolved["user_id"],
-        tier=resolved["tier"],
-        display_name=resolved["display_name"],
-        status=resolved["status"],
-        source=resolved["source"],
-        features=resolved["features"],
+        user_id=resolved.user_id,
+        tier=resolved.tier,
+        display_name=resolved.display_name,
+        status=resolved.status,
+        source=resolved.source,
+        features=resolved.features,
         quotas=[QuotaState(**state) for state in usage],
-        current_period_end=resolved.get("current_period_end"),
-        cancel_at_period_end=resolved.get("cancel_at_period_end", False),
-        grace_ends_at=resolved.get("grace_ends_at"),
+        current_period_end=resolved.current_period_end,
+        cancel_at_period_end=resolved.cancel_at_period_end,
+        grace_ends_at=resolved.grace_ends_at,
     )

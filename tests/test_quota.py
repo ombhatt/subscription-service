@@ -5,12 +5,14 @@ from sqlalchemy import func, select
 
 from app.errors import QuotaExceeded
 from app.models import SalesInquiry, Subscription
-from app.plans import Tier
+from app.plans import QuotaWindow, Tier
 from app.services import quota
-from app.services.entitlements import resolve_entitlements
+from app.services.entitlements import Entitlements, resolve_entitlements
 
 
-async def entitlements_for(session, user_id: str, tier: str, status: str = "active") -> dict:
+async def entitlements_for(
+    session, user_id: str, tier: str, status: str = "active"
+) -> Entitlements:
     if tier != "free":
         session.add(Subscription(user_id=user_id, tier=tier, status=status))
         await session.commit()
@@ -19,7 +21,7 @@ async def entitlements_for(session, user_id: str, tier: str, status: str = "acti
 
 async def test_free_tier_is_capped(session):
     ents = await entitlements_for(session, "q1", "free")
-    limit = next(q["limit"] for q in ents["quotas"] if q["key"] == "messages_per_day")
+    limit = ents.quota("messages_per_day").limit
 
     for _ in range(limit):
         await quota.consume(session, user_id="q1", key="messages_per_day", entitlements=ents)
@@ -63,7 +65,7 @@ async def test_counters_are_per_user(session):
 
 async def test_daily_window_starts_at_utc_midnight(session):
     ents = await entitlements_for(session, "q6", "free")
-    start, end = quota.window_for("daily", ents)
+    start, end = quota.window_for(QuotaWindow.DAILY, ents)
     assert (start.hour, start.minute, start.second) == (0, 0, 0)
     assert (end - start).days == 1
 
@@ -75,18 +77,18 @@ async def test_billing_window_follows_the_subscribers_own_period(session):
     now = datetime.now(UTC)
     period_start = now - timedelta(days=10)
     period_end = now + timedelta(days=20)
-    ents = {
-        "current_period_start": period_start.isoformat(),
-        "current_period_end": period_end.isoformat(),
-    }
-    start, end = quota.window_for("billing_period", ents)
+    ents = (await entitlements_for(session, "q6b", "pro")).model_copy(
+        update={"current_period_start": period_start, "current_period_end": period_end}
+    )
+    start, end = quota.window_for(QuotaWindow.BILLING_PERIOD, ents)
     assert start == period_start
     assert end == period_end
 
 
 async def test_free_users_fall_back_to_the_calendar_month(session):
-    ents = {"current_period_start": None, "current_period_end": None}
-    start, end = quota.window_for("billing_period", ents)
+    ents = await entitlements_for(session, "q6c", "free")
+    assert ents.current_period_start is None
+    start, end = quota.window_for(QuotaWindow.BILLING_PERIOD, ents)
     assert start.day == 1
     assert end.day == 1
     assert end > start

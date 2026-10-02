@@ -15,24 +15,24 @@ async def make_sub(session, user_id: str, **kwargs) -> Subscription:
 
 async def test_unknown_user_resolves_to_free(session):
     ents = await resolve_entitlements(session, "nobody")
-    assert ents["tier"] == "free"
-    assert ents["source"] == "default"
-    assert ents["features"]["models"] == ["small"]
+    assert ents.tier == "free"
+    assert ents.source == "default"
+    assert ents.features.models == ("small",)
 
 
 async def test_active_subscription_grants_its_tier(session):
     await make_sub(session, "u1", tier="pro", status="active")
     ents = await resolve_entitlements(session, "u1")
-    assert ents["tier"] == "pro"
-    assert ents["source"] == "subscription"
-    assert "reasoning" in ents["features"]["models"]
+    assert ents.tier == "pro"
+    assert ents.source == "subscription"
+    assert "reasoning" in ents.features.models
 
 
 async def test_incomplete_checkout_grants_nothing(session):
     # Payment never confirmed: the row exists, the access does not.
     await make_sub(session, "u2", tier="pro", status="incomplete")
     ents = await resolve_entitlements(session, "u2")
-    assert ents["tier"] == "free"
+    assert ents.tier == "free"
 
 
 async def test_past_due_keeps_access_inside_grace(session):
@@ -44,8 +44,8 @@ async def test_past_due_keeps_access_inside_grace(session):
         past_due_since=datetime.now(UTC) - timedelta(days=2),
     )
     ents = await resolve_entitlements(session, "u3")
-    assert ents["tier"] == "plus"
-    assert ents["grace_ends_at"] is not None
+    assert ents.tier == "plus"
+    assert ents.grace_ends_at is not None
 
 
 async def test_past_due_loses_access_after_grace(session):
@@ -59,7 +59,7 @@ async def test_past_due_loses_access_after_grace(session):
         past_due_since=datetime.now(UTC) - timedelta(days=30),
     )
     ents = await resolve_entitlements(session, "u4")
-    assert ents["tier"] == "free"
+    assert ents.tier == "free"
 
 
 async def test_grant_lifts_a_free_user(session):
@@ -68,8 +68,8 @@ async def test_grant_lifts_a_free_user(session):
     )
     await session.commit()
     ents = await resolve_entitlements(session, "u5")
-    assert ents["tier"] == "pro"
-    assert ents["source"] == "grant"
+    assert ents.tier == "pro"
+    assert ents.source == "grant"
 
 
 async def test_expired_grant_is_ignored(session):
@@ -84,7 +84,7 @@ async def test_expired_grant_is_ignored(session):
     )
     await session.commit()
     ents = await resolve_entitlements(session, "u6")
-    assert ents["tier"] == "free"
+    assert ents.tier == "free"
 
 
 async def test_grant_never_downgrades_a_paying_customer(session):
@@ -94,19 +94,19 @@ async def test_grant_never_downgrades_a_paying_customer(session):
     )
     await session.commit()
     ents = await resolve_entitlements(session, "u7")
-    assert ents["tier"] == "pro"
+    assert ents.tier == "pro"
 
 
 async def test_resolution_is_cached_until_invalidated(session):
     sub = await make_sub(session, "u8", tier="free", status="free")
-    assert (await resolve_entitlements(session, "u8"))["tier"] == "free"
+    assert (await resolve_entitlements(session, "u8")).tier == "free"
 
     sub.tier = "pro"
     sub.status = "active"
     await session.commit()
 
     # Still the cached answer...
-    assert (await resolve_entitlements(session, "u8"))["tier"] == "free"
+    assert (await resolve_entitlements(session, "u8")).tier == "free"
     # ...until the write path invalidates, which is what sync does.
     await invalidate_entitlements("u8")
-    assert (await resolve_entitlements(session, "u8"))["tier"] == "pro"
+    assert (await resolve_entitlements(session, "u8")).tier == "pro"

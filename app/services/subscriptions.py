@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select, text
@@ -18,9 +19,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
+from app.billing_provider import RemotePrice, RemoteSubscription
 from app.config import get_settings
 from app.errors import BillingError
-from app.models import PAID_STATUSES, Subscription, SubscriptionStatus
+from app.models import Subscription, SubscriptionStatus
 from app.observability import event as log_event
 from app.observability import subscription_transitions
 from app.plans import CATALOG, BillingInterval, Tier, price_catalog, price_id_for
@@ -32,23 +34,6 @@ log = logging.getLogger(__name__)
 # Stripe metadata the reconcile job puts on a subscription whose Supabase
 # account has been deleted. Read here so a webhook never re-creates that user.
 ORPHANED_AT = "orphaned_at"
-
-# Stripe's vocabulary -> ours. Anything unlisted is treated as no paid access.
-STATUS_MAP: dict[str, SubscriptionStatus] = {
-    "active": SubscriptionStatus.ACTIVE,
-    "trialing": SubscriptionStatus.TRIALING,
-    "past_due": SubscriptionStatus.PAST_DUE,
-    "unpaid": SubscriptionStatus.PAST_DUE,
-    "paused": SubscriptionStatus.PAUSED,
-    "incomplete": SubscriptionStatus.INCOMPLETE,
-    "incomplete_expired": SubscriptionStatus.FREE,
-    "canceled": SubscriptionStatus.FREE,
-}
-
-
-def _ts(value: int | None) -> datetime | None:
-    return datetime.fromtimestamp(value, tz=UTC) if value else None
-
 
 def _fingerprint(sub: Subscription) -> tuple:
     """Everything the cached entitlement payload exposes.
@@ -144,7 +129,7 @@ async def _bound_lock_wait(session: AsyncSession) -> None:
 # --------------------------------------------------------------------------
 
 
-def resolve_tier(price: dict | None) -> tuple[Tier | None, BillingInterval | None]:
+def resolve_tier(price: RemotePrice | None) -> tuple[Tier | None, BillingInterval | None]:
     """Which tier a Stripe price represents.
 
     Configured price ids win. A price we no longer configure -- the old one a
@@ -152,39 +137,31 @@ def resolve_tier(price: dict | None) -> tuple[Tier | None, BillingInterval | Non
     the seed script stamps on every price. A price with neither resolves to
     nothing, and the caller records that loudly rather than guessing.
     """
-    if not price:
+    if price is None:
         return None, None
 
-    price_id = price.get("id")
     catalog = price_catalog()
-    if price_id in catalog:
-        return catalog[price_id]
+    if price.id in catalog:
+        return catalog[price.id]
 
-    interval = None
-    recurring = price.get("recurring") or {}
-    if recurring.get("interval") == "month":
-        interval = BillingInterval.MONTHLY
-    elif recurring.get("interval") == "year":
-        interval = BillingInterval.ANNUAL
-
-    meta_tier = (price.get("metadata") or {}).get("tier")
-    if meta_tier:
+    if price.tier:
         try:
-            return Tier(meta_tier), interval
+            return Tier(price.tier), price.interval
         except ValueError:
             pass
-    return None, interval
+    return None, price.interval
 
 
-def belongs_to_this_service(remote: dict | None) -> bool:
+def belongs_to_this_service(remote: RemoteSubscription | None) -> bool:
     """Whether a Stripe subscription is one of ours.
 
-    One Stripe account can serve several applications -- this one shares its
-    account with another product, and *its* customers carry `metadata.user_id`
-    too, which is the join key this service resolves unknown customers by. So
-    "the customer names a user" is not enough to claim a subscription: it would
-    attach a stranger's subscription to a row in this database, and our nightly
-    reconcile would then keep re-syncing it forever.
+    One Stripe account can serve several applications -- this one shared a
+    sandbox with another product until it got its own, and *that* product's
+    customers carry `metadata.user_id` too, which is the join key this service
+    resolves unknown customers by. So "the customer names a user" is not enough
+    to claim a subscription: it would attach a stranger's subscription to a row
+    in this database, and our nightly reconcile would then keep re-syncing it
+    forever.
 
     Ownership is the price. A subscription is ours when its price resolves to
     one of our tiers -- a configured price id, or the `tier` metadata the seed
@@ -199,7 +176,7 @@ def belongs_to_this_service(remote: dict | None) -> bool:
         # No subscription to attribute. Our own customers get their row at
         # checkout, so there is nothing here worth inventing one for.
         return False
-    tier, _ = resolve_tier(stripe_client.subscription_price(remote))
+    tier, _ = resolve_tier(remote.price)
     return tier is not None
 
 
@@ -238,7 +215,7 @@ async def sync_subscription_from_stripe(
     customer.
     """
     sub = await _find_by_customer(session, stripe_customer_id, lock=True)
-    remote: dict | None = None
+    remote: RemoteSubscription | None = None
 
     if sub is None:
         # First webhook for this customer, or a customer created outside our
@@ -256,13 +233,12 @@ async def sync_subscription_from_stripe(
             )
             return None
 
-        customer = await stripe_client.retrieve_customer(stripe_customer_id)
-        user_id = (customer.get("metadata") or {}).get("user_id")
+        user_id = (await stripe_client.retrieve_customer(stripe_customer_id)).user_id
         if not user_id:
             log.error("stripe customer %s has no user_id metadata; skipping", stripe_customer_id)
             return None
 
-        if (remote.get("metadata") or {}).get(ORPHANED_AT):
+        if remote.metadata.get(ORPHANED_AT):
             # Reconcile found this subscriber's account deleted and marked the
             # subscription -- and the mark itself fires the webhook that lands
             # here. Creating a row would bring back a user nobody can sign in
@@ -304,10 +280,16 @@ async def sync_subscription_from_stripe(
         # order is the point: see the docstring.
         remote = await stripe_client.fetch_current_subscription(stripe_customer_id)
 
-    if remote is None:
-        _apply_no_subscription(sub)
-    else:
-        _apply_remote(sub, remote)
+    state = project(remote)
+    if remote is not None and remote.grants_access and state.tier is Tier.FREE:
+        # An unrecognised price on a live subscription. Not guessed upward --
+        # mirrored as free, and the audit trail and this line raise the alarm.
+        log.error(
+            "unresolved price %s on subscription %s",
+            remote.price.id if remote.price else None,
+            remote.id,
+        )
+    _write(sub, state)
 
     after = audit.snapshot(sub)
     changed = before != after
@@ -344,69 +326,80 @@ async def sync_subscription_from_stripe(
     return sub
 
 
-def _apply_no_subscription(sub: Subscription) -> None:
-    sub.tier = Tier.FREE.value
-    sub.status = SubscriptionStatus.FREE.value
-    sub.stripe_subscription_id = None
-    sub.stripe_price_id = None
-    sub.billing_interval = None
-    sub.current_period_start = None
-    sub.current_period_end = None
-    sub.cancel_at_period_end = False
-    sub.trial_end = None
-    sub.past_due_since = None
-    sub.discount = None
+@dataclass(frozen=True)
+class MirroredState:
+    """What the local row should say, given what Stripe says.
+
+    The one place that decides it. Sync writes it; reconcile compares the row
+    against it. They used to carry a copy each of which statuses pay for a tier
+    and what an unrecognised price means, and copies drift -- into drift the
+    nightly job reports and repairs forever, or drift it never sees.
+    """
+
+    tier: Tier
+    status: SubscriptionStatus
+    stripe_subscription_id: str | None = None
+    stripe_price_id: str | None = None
+    billing_interval: BillingInterval | None = None
+    current_period_start: datetime | None = None
+    current_period_end: datetime | None = None
+    cancel_at_period_end: bool = False
+    trial_end: datetime | None = None
+    discount: dict | None = None
 
 
-def _apply_remote(sub: Subscription, remote: dict) -> None:
-    status = STATUS_MAP.get(remote.get("status", ""), SubscriptionStatus.FREE)
+NO_SUBSCRIPTION = MirroredState(tier=Tier.FREE, status=SubscriptionStatus.FREE)
 
-    if status is SubscriptionStatus.FREE:
-        # Terminal: cancelled, or an abandoned checkout that expired. Stripe
-        # keeps returning the dead object, so without this the row would hold a
-        # subscription id that can never be charged again -- and local state
-        # would differ depending on whether the provider still lists it. The
-        # transition is preserved in the audit trail either way.
-        _apply_no_subscription(sub)
-        return
 
-    price = stripe_client.subscription_price(remote)
-    tier, interval = resolve_tier(price)
+def project(remote: RemoteSubscription | None) -> MirroredState:
+    """Stripe's answer, in the shape of our row. Pure: no I/O, no clock.
 
-    if status in PAID_STATUSES:
-        if tier is None:
-            # An unrecognised price on a live subscription. Do not guess a tier
-            # upward -- drop to free and let the audit trail raise the alarm.
-            log.error(
-                "unresolved price %s on subscription %s",
-                (price or {}).get("id"),
-                remote.get("id"),
-            )
-            sub.tier = Tier.FREE.value
-        else:
-            sub.tier = tier.value
-    else:
-        sub.tier = Tier.FREE.value
+    A subscription that has ended mirrors as no subscription at all. Stripe
+    keeps returning the dead object, so otherwise the row would hold an id that
+    can never be charged again -- and local state would depend on whether the
+    provider still lists it. The transition is in the audit trail either way.
 
+    Only a status that grants access carries a tier, and only a price we can
+    resolve names one: an unrecognised price is never guessed upward.
+    """
+    if remote is None or remote.status is SubscriptionStatus.FREE:
+        return NO_SUBSCRIPTION
+
+    tier, interval = resolve_tier(remote.price)
+    return MirroredState(
+        tier=tier if (remote.grants_access and tier is not None) else Tier.FREE,
+        status=remote.status,
+        stripe_subscription_id=remote.id,
+        stripe_price_id=remote.price.id if remote.price else None,
+        billing_interval=interval,
+        current_period_start=remote.period_start,
+        current_period_end=remote.period_end,
+        cancel_at_period_end=remote.cancel_at_period_end,
+        trial_end=remote.trial_end,
+        discount=remote.discount,
+    )
+
+
+def _write(sub: Subscription, state: MirroredState) -> None:
     # past_due_since is set once, on entry, and cleared on the way out: the grace
-    # window must not restart every time a retry fails.
-    if status is SubscriptionStatus.PAST_DUE:
+    # window must not restart every time a retry fails. It is the one field that
+    # depends on what the row said before, so it is decided here, not projected.
+    if state.status is SubscriptionStatus.PAST_DUE:
         if sub.past_due_since is None:
             sub.past_due_since = datetime.now(UTC)
     else:
         sub.past_due_since = None
 
-    period_start, period_end = stripe_client.subscription_period(remote)
-
-    sub.status = status.value
-    sub.stripe_subscription_id = remote.get("id")
-    sub.stripe_price_id = (price or {}).get("id")
-    sub.billing_interval = interval.value if interval else None
-    sub.current_period_start = _ts(period_start)
-    sub.current_period_end = _ts(period_end)
-    sub.cancel_at_period_end = bool(remote.get("cancel_at_period_end"))
-    sub.trial_end = _ts(remote.get("trial_end"))
-    sub.discount = stripe_client.subscription_discount(remote)
+    sub.tier = state.tier.value
+    sub.status = state.status.value
+    sub.stripe_subscription_id = state.stripe_subscription_id
+    sub.stripe_price_id = state.stripe_price_id
+    sub.billing_interval = state.billing_interval.value if state.billing_interval else None
+    sub.current_period_start = state.current_period_start
+    sub.current_period_end = state.current_period_end
+    sub.cancel_at_period_end = state.cancel_at_period_end
+    sub.trial_end = state.trial_end
+    sub.discount = state.discount
 
 
 async def mark_disputed(
@@ -457,7 +450,7 @@ async def start_checkout(
         raise BillingError(f"no price configured for {tier.value}/{interval.value}")
 
     sub = await get_or_create_subscription(session, user_id)
-    if sub.status in (s.value for s in PAID_STATUSES):
+    if sub.grants_access:
         # An existing subscriber changes plan in the portal, where Stripe handles
         # proration; a second checkout would create a second subscription.
         raise BillingError(
@@ -473,7 +466,7 @@ async def start_checkout(
         # only that one. So ask Stripe. Nothing is written; the webhook or the
         # nightly reconcile still does that.
         remote = await stripe_client.fetch_current_subscription(sub.stripe_customer_id)
-        if remote and STATUS_MAP.get(remote.get("status", "")) in PAID_STATUSES:
+        if remote and remote.grants_access:
             raise BillingError(
                 "You already have a subscription; it can take a minute to appear here. "
                 "Refresh this page, or use Manage billing to change plan.",
@@ -547,7 +540,7 @@ async def schedule_cancellation(session: AsyncSession, *, user_id: str) -> Subsc
     sub = await get_subscription(session, user_id)
     if sub is None or not sub.stripe_subscription_id:
         raise BillingError("no subscription to cancel", code=404)
-    if sub.status not in (s.value for s in PAID_STATUSES):
+    if not sub.grants_access:
         raise BillingError(f"a {sub.status} subscription cannot be cancelled", code=409)
     if sub.cancel_at_period_end:
         return sub
@@ -634,7 +627,7 @@ async def _plan_change_flow(sub: Subscription, target: tuple[Tier, BillingInterv
         return None  # already on it; the confirm page would be a no-op
 
     remote = await stripe_client.fetch_current_subscription(sub.stripe_customer_id)
-    items = ((remote or {}).get("items") or {}).get("data") or []
+    items = remote.item_ids if remote else ()
     if len(items) != 1:
         # Stripe only accepts this flow for single-item subscriptions, and every
         # subscription this service creates has exactly one line.
@@ -644,6 +637,6 @@ async def _plan_change_flow(sub: Subscription, target: tuple[Tier, BillingInterv
         "type": "subscription_update_confirm",
         "subscription_update_confirm": {
             "subscription": sub.stripe_subscription_id,
-            "items": [{"id": items[0]["id"], "price": price_id, "quantity": 1}],
+            "items": [{"id": items[0], "price": price_id, "quantity": 1}],
         },
     }

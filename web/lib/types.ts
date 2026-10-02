@@ -1,78 +1,30 @@
-/** Mirrors the API's response shapes. Keep in step with app/schemas.py. */
+/**
+ * The API's shapes, generated from its OpenAPI schema into openapi.gen.ts by
+ * `make api-types` and checked in CI -- not copied by hand from app/schemas.py,
+ * which is how these used to drift. Change the pydantic model, regenerate, and
+ * the compiler finds every use that no longer fits.
+ */
+import type { components } from "./openapi.gen";
 
-export type Tier = "free" | "plus" | "pro" | "enterprise";
+type Schemas = components["schemas"];
 
-export interface QuotaState {
-  key: string;
-  limit: number | null; // null means unlimited
-  used: number;
-  remaining: number | null;
-  reset_at: string;
-}
+export type Tier = Schemas["Tier"];
+export type Interval = Schemas["BillingInterval"];
+export type QuotaState = Schemas["QuotaState"];
+export type Entitlements = Schemas["EntitlementResponse"];
+export type Price = Schemas["PlanPrice"];
+export type Discount = Schemas["Discount"];
+export type SubscriptionSummary = Schemas["SubscriptionSummary"];
+export type ChatReply = Schemas["ChatReply"];
+export type ContactSalesPayload = Schemas["ContactSalesRequest"];
 
-export interface Entitlements {
-  user_id: string;
-  tier: Tier;
-  display_name: string;
-  status: string;
-  source: "subscription" | "grant" | "default";
-  features: {
-    models?: string[];
-    // Null means unlimited, the same as a quota limit. Typed as number only, it
-  // coalesced to 0 on the pricing page and rendered Enterprise as "0 context".
-  context_tokens?: number | null;
-    history_retention_days?: number | null;
-    api_access?: boolean;
-    support_sla?: string;
-    [key: string]: unknown;
-  };
-  quotas: QuotaState[];
-  current_period_end: string | null;
-  cancel_at_period_end: boolean;
-  grace_ends_at: string | null;
-}
-
-export type Interval = "monthly" | "annual";
-
-export interface Price {
-  price_id: string;
-  /** In the currency's smallest unit, as Stripe stores it. Null if unreadable. */
-  unit_amount: number | null;
-  currency: string | null;
-}
-
-export interface Plan {
-  tier: Tier;
-  display_name: string;
-  purchasable: boolean;
-  features: Entitlements["features"];
-  quotas: { key: string; limit: number | null; window: string }[];
+/**
+ * The generator reads `dict[BillingInterval, PlanPrice]` as any string key. The
+ * keys are intervals, and a tier with no price for one simply lacks it.
+ */
+export type Plan = Omit<Schemas["PlanResponse"], "prices"> & {
   prices: Partial<Record<Interval, Price>>;
-}
-
-/** A discount mirrored from Stripe onto the subscription. */
-export interface Discount {
-  coupon_id: string | null;
-  name: string | null;
-  percent_off: number | null;
-  amount_off: number | null;
-  currency: string | null;
-  duration: string | null;
-  duration_in_months: number | null;
-  promotion_code: string | null;
-  /** Unix seconds, or null for a discount that never ends. */
-  ends_at: number | null;
-}
-
-export interface SubscriptionSummary {
-  tier: Tier;
-  status: string;
-  /** Which price they are on, so the billing page can show what they pay. */
-  billing_interval: Interval | null;
-  current_period_end: string | null;
-  cancel_at_period_end: boolean;
-  discount: Discount | null;
-}
+};
 
 /**
  * What to show for a plan: an amount, optionally struck through against a list
@@ -160,6 +112,9 @@ export function formatMoney(price: Price | undefined, interval: Interval): strin
   return `${formatted}/${interval === "annual" ? "yr" : "mo"}`;
 }
 
+// Error bodies are built by app/errors.py's handlers rather than declared as
+// response models, so they are not in the schema and stay written out here.
+
 /** 429 body from the quota middleware. */
 export interface QuotaExceeded {
   error: "quota_exceeded";
@@ -178,21 +133,6 @@ export interface FeatureNotEntitled {
   feature: string;
   current_tier: Tier;
   required_tier: Tier | null;
-}
-
-export interface ChatReply {
-  model: string;
-  reply: string;
-  quota: { key: string; limit: number | null; used: number; remaining: number | null };
-}
-
-/** What the Enterprise inquiry form sends. Mirrors ContactSalesRequest. */
-export interface ContactSalesPayload {
-  email: string;
-  company?: string | null;
-  seats?: number | null;
-  message?: string | null;
-  source: "pricing_page" | "paywall" | "billing_page";
 }
 
 export const TIER_RANK: Record<Tier, number> = { free: 0, plus: 1, pro: 2, enterprise: 3 };

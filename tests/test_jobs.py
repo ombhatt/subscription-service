@@ -23,7 +23,7 @@ from app.jobs.expire_grace import expire_grace_windows
 from app.jobs.reconcile import reconcile
 from app.models import Subscription, SubscriptionAudit, SubscriptionStatus
 from app.plans import Tier
-from app.services.entitlements import _ttl_for, resolve_entitlements
+from app.services.entitlements import Entitlements, _ttl_for, resolve_entitlements
 
 
 async def seed(session, **kwargs) -> Subscription:
@@ -167,7 +167,7 @@ async def test_one_customer_failing_does_not_undo_the_others(
     async def flaky(customer_id):
         if customer_id == "cus_b":
             raise ConnectionError("stripe timed out for this one customer")
-        return stripe.subscriptions.get(customer_id)
+        return await stripe.fetch_current_subscription(customer_id)
 
     monkeypatch.setattr(stripe_client, "fetch_current_subscription", flaky)
 
@@ -519,7 +519,7 @@ async def test_a_closed_grace_window_revokes_effective_access(session):
     assert expired == ["u1"]
     await reload(session, sub)
     assert sub.tier == Tier.PRO.value, "the mirror is Stripe's to write, not this job's"
-    assert (await resolve_entitlements(session, "u1"))["tier"] == Tier.FREE.value
+    assert (await resolve_entitlements(session, "u1")).tier == Tier.FREE.value
 
 
 async def test_a_grace_window_still_open_is_left_alone(session):
@@ -577,7 +577,7 @@ async def test_the_entitlement_cache_is_invalidated(session):
     """
     sub = await seed(session, **past_due(days_ago=2))       # window still open
     cached = await resolve_entitlements(session, "u1")
-    assert cached["tier"] == Tier.PRO.value, "precondition: cached while still in grace"
+    assert cached.tier == Tier.PRO.value, "precondition: cached while still in grace"
 
     # The window closes.
     sub.past_due_since = datetime.now(UTC) - timedelta(days=10)
@@ -586,7 +586,7 @@ async def test_the_entitlement_cache_is_invalidated(session):
     assert await expire_grace_windows(session) == ["u1"]
 
     after = await resolve_entitlements(session, "u1")
-    assert after["tier"] == Tier.FREE.value, "a stale cache entry kept granting paid access"
+    assert after.tier == Tier.FREE.value, "a stale cache entry kept granting paid access"
 
 
 async def test_running_it_again_changes_nothing(session):
@@ -785,7 +785,7 @@ async def test_the_two_nightly_jobs_do_not_undo_each_other(session, stripe):
         select(Subscription).where(Subscription.user_id == "u1"))).scalar_one()
     await session.refresh(row)
     assert row.tier == Tier.PRO.value, "the mirror is Stripe's; nothing else may write it"
-    assert (await resolve_entitlements(session, "u1"))["tier"] == Tier.FREE.value
+    assert (await resolve_entitlements(session, "u1")).tier == Tier.FREE.value
 
     audits = (await session.execute(select(SubscriptionAudit).where(
         SubscriptionAudit.reason == "dunning.grace_expired"))).scalars().all()
@@ -819,11 +819,10 @@ async def test_a_new_dunning_cycle_is_reported_again(session, stripe):
 # ==========================================================================
 
 
-def _payload(seconds_left: float | None) -> dict:
-    if seconds_left is None:
-        return {"tier": "pro", "grace_ends_at": None}
-    when = datetime.now(UTC) + timedelta(seconds=seconds_left)
-    return {"tier": "pro", "grace_ends_at": when.isoformat()}
+def _payload(seconds_left: float | None) -> Entitlements:
+    """Only the grace boundary matters to the TTL, so only it is set."""
+    when = None if seconds_left is None else datetime.now(UTC) + timedelta(seconds=seconds_left)
+    return Entitlements.model_construct(tier=Tier.PRO, grace_ends_at=when)
 
 
 def test_a_cached_entitlement_never_outlives_the_grace_window():
@@ -847,3 +846,17 @@ def test_a_sub_second_window_is_not_cached_at_all():
 def test_a_boundary_already_passed_needs_no_cap():
     """Past the window the answer is stable again -- free, and staying free."""
     assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
+
+
+async def test_a_status_stripe_adds_later_is_not_drift_every_night(session, stripe):
+    """Sync stores an unrecognised Stripe status as free. Reconcile used to
+    translate it separately, to nothing, so the row never matched: reported and
+    re-synced on every run, forever. One translation now serves both."""
+    await seed(session)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="some_new_status", price_id="price_pro_m")
+
+    first = await reconcile(session)
+    second = await reconcile(session)
+
+    assert (first.mismatched, second.mismatched) == (0, 0)

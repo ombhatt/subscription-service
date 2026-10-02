@@ -14,15 +14,27 @@ from app.flags import is_enabled
 from app.models import SalesInquiry, Subscription
 from app.observability import event as log_event
 from app.observability import sales_inquiries
-from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
+from app.plans import (
+    CATALOG,
+    PURCHASABLE_TIERS,
+    TIER_RANK,
+    BillingInterval,
+    Tier,
+    price_catalog,
+    price_id_for,
+)
 from app.ratelimit import contact_sales_rate_limit
 from app.schemas import (
     CheckoutRequest,
     CheckoutResponse,
     ContactSalesRequest,
     ContactSalesResponse,
+    Features,
+    PlanPrice,
+    PlanResponse,
     PortalRequest,
     PortalResponse,
+    QuotaLimit,
     SubscriptionSummary,
 )
 from app.services.entitlements import commit_and_invalidate, resolve_entitlements
@@ -39,11 +51,12 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
 
-_PLANS_CACHE_KEY = "plans:v1"
+# Bumped whenever the payload's shape changes, so a cached old one is not served.
+_PLANS_CACHE_KEY = "plans:v2"
 _PLANS_CACHE_TTL = 300
 
 
-@router.get("/plans")
+@router.get("/plans", response_model=list[PlanResponse])
 async def plans() -> list[dict]:
     """The catalog, for the pricing page.
 
@@ -66,21 +79,18 @@ async def plans() -> list[dict]:
             price_id = price_id_for(tier, interval)
             if not price_id:
                 continue
-            prices[interval.value] = {"price_id": price_id, **await _price_amount(price_id)}
+            prices[interval] = PlanPrice(price_id=price_id, **await _price_amount(price_id))
 
-        out.append(
-            {
-                "tier": tier.value,
-                "display_name": definition.display_name,
-                "purchasable": definition.purchasable,
-                "features": definition.features,
-                "quotas": [
-                    {"key": q.key, "limit": q.limit, "window": q.window.value}
-                    for q in definition.quotas.values()
-                ],
-                "prices": prices,
-            }
+        plan = PlanResponse(
+            tier=tier,
+            display_name=definition.display_name,
+            purchasable=definition.purchasable,
+            sales_led=definition.sales_led,
+            features=Features(**definition.features),
+            quotas=[QuotaLimit.of(q) for q in definition.quotas.values()],
+            prices=prices,
         )
+        out.append(plan.model_dump(mode="json"))
 
     await set_json(_PLANS_CACHE_KEY, out, _PLANS_CACHE_TTL)
     return out
@@ -223,11 +233,11 @@ async def billing_health() -> dict:
     """Cheap config check: are the prices this service needs actually set?"""
     missing = [
         f"{tier.value}/{interval.value}"
-        for tier in (Tier.PLUS, Tier.PRO)
+        for tier in PURCHASABLE_TIERS
         for interval in BillingInterval
         if not price_id_for(tier, interval)
     ]
-    if missing and len(missing) == 4:
+    if not price_catalog():
         raise BillingError("no Stripe prices configured; run scripts/seed_stripe.py", code=503)
     return {"status": "ok", "unconfigured_prices": missing}
 
@@ -265,7 +275,7 @@ async def contact_sales(
     # different conversation from a visitor browsing the pricing page.
     current_tier = None
     if user is not None:
-        current_tier = (await resolve_entitlements(session, user.id))["tier"]
+        current_tier = (await resolve_entitlements(session, user.id)).tier.value
 
     inquiry = SalesInquiry(
         user_id=user.id if user else None,

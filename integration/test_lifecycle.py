@@ -52,8 +52,8 @@ async def test_a_new_subscription_grants_its_tier(session, clock, prices):
     assert sub.billing_interval == "monthly"
 
     ents = await resolve_entitlements(session, user_id)
-    assert ents["tier"] == "pro"
-    assert "reasoning" in ents["features"]["models"]
+    assert ents.tier == "pro"
+    assert "reasoning" in ents.features.models
 
 
 async def test_renewal_moves_the_period_forward(session, clock, prices):
@@ -99,8 +99,8 @@ async def test_a_failed_renewal_opens_the_grace_window(session, clock, prices):
     assert grace_ends_at(failed) is not None
 
     ents = await resolve_entitlements(session, user_id)
-    assert ents["tier"] == "pro"
-    assert ents["grace_ends_at"] is not None
+    assert ents.tier == "pro"
+    assert ents.grace_ends_at is not None
 
 
 async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, prices):
@@ -128,7 +128,7 @@ async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, 
 
     # The read path revokes immediately, without waiting for the nightly job.
     ents = await resolve_entitlements(session, user_id)
-    assert ents["tier"] == "free"
+    assert ents.tier == "free"
 
     # And the job records it -- without touching the mirror. Stripe still says
     # Pro, because Stripe is still retrying the card, and `subscriptions.tier`
@@ -178,7 +178,7 @@ async def test_cancelling_keeps_access_until_the_boundary(session, clock, prices
     assert ended.tier == "free"
     assert ended.status == SubscriptionStatus.FREE.value
     assert ended.stripe_subscription_id is None
-    assert (await resolve_entitlements(session, user_id))["tier"] == "free"
+    assert (await resolve_entitlements(session, user_id)).tier == "free"
 
 
 async def test_a_trial_grants_access_then_converts(session, clock, prices):
@@ -194,7 +194,7 @@ async def test_a_trial_grants_access_then_converts(session, clock, prices):
     assert trialing.status == SubscriptionStatus.TRIALING.value
     assert trialing.tier == "pro", "a trial grants the tier it is a trial of"
     assert trialing.trial_end is not None
-    assert (await resolve_entitlements(session, user_id))["tier"] == "pro"
+    assert (await resolve_entitlements(session, user_id)).tier == "pro"
 
     clock.advance_past_renewal(subscription["id"])
     converted = await sync(session, customer["id"])
@@ -224,4 +224,4 @@ async def test_an_upgrade_is_reflected_immediately(session, clock, prices):
     upgraded = await sync(session, customer["id"])
     assert upgraded.tier == "pro"
     assert upgraded.stripe_price_id == prices["pro_monthly"]
-    assert (await resolve_entitlements(session, user_id))["tier"] == "pro"
+    assert (await resolve_entitlements(session, user_id)).tier == "pro"

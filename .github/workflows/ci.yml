@@ -229,9 +229,17 @@ jobs:
       - name: Install
         run: npm ci
 
-      # Before the build and the browsers: these are pure functions, they run
-      # in under a second, and there is no reason to wait five minutes to find
-      # out that a price is rounded the wrong way.
+      # The API's types are generated, never hand-edited: openapi.json is
+      # exported from the app (the Python suite checks that link, in
+      # tests/test_api_types.py) and openapi.gen.ts from openapi.json. This
+      # checks the second link, so a regenerated schema with stale TypeScript
+      # fails here instead of compiling against the old shapes.
+      - name: Generated API types match the schema
+        run: |
+          npm run gen:api
+          git diff --exit-code -- lib/openapi.gen.ts \
+            || { echo "::error::web/lib/openapi.gen.ts is stale; run \`make api-types\` and commit it"; exit 1; }
+
       # Before the build and the browsers: these are pure functions, they run
       # in under a second, and there is no reason to wait five minutes to find
       # out that a price is rounded the wrong way. The coverage *gate* on the

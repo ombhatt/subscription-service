@@ -47,7 +47,8 @@ from sqlalchemy.pool import NullPool
 from app.config import get_settings
 from app.db import engine_kwargs
 from app.models import Base
-from app.stripe_client import _as_dict
+from app.plans import BillingInterval, Tier, price_id_for
+from app.stripe_client import _as_dict, parse_subscription
 from scripts.cleanup_ci_schemas import new_schema_name
 
 # Postgres when set. Read from the environment first (CI), then .env (local runs
@@ -273,11 +274,9 @@ class Clock:
         subscription to end.
         """
         sub = _as_dict(stripe.Subscription.retrieve(subscription_id))
-        from app.stripe_client import subscription_period
-
-        _, period_end = subscription_period(sub)
+        period_end = parse_subscription(sub).period_end
         assert period_end, "subscription has no period end to advance past"
-        self.advance_to(period_end + DRAFT_WINDOW_S)
+        self.advance_to(int(period_end.timestamp()) + DRAFT_WINDOW_S)
 
         if sub["cancel_at_period_end"]:
             self._wait_for(
@@ -318,18 +317,11 @@ def clock(request):
 
 @pytest.fixture
 def prices():
-    s = get_settings()
-    missing = [
-        name
-        for name, value in {
-            "pro_monthly": s.stripe_price_pro_monthly,
-            "plus_monthly": s.stripe_price_plus_monthly,
-        }.items()
-        if not value
-    ]
+    wanted = {
+        "pro_monthly": price_id_for(Tier.PRO, BillingInterval.MONTHLY),
+        "plus_monthly": price_id_for(Tier.PLUS, BillingInterval.MONTHLY),
+    }
+    missing = [name for name, value in wanted.items() if not value]
     if missing:
         pytest.skip(f"prices not configured in .env: {missing}")
-    return {
-        "pro_monthly": s.stripe_price_pro_monthly,
-        "plus_monthly": s.stripe_price_plus_monthly,
-    }
+    return wanted

@@ -55,7 +55,7 @@ async def test_sync_takes_the_lock(session, stripe, monkeypatch):
 
     async def watched_fetch(customer_id):
         order.append("stripe.fetch")
-        return stripe.subscriptions.get(customer_id)
+        return await stripe.fetch_current_subscription(customer_id)
 
     monkeypatch.setattr(subscriptions, "_find_by_customer", watched_find)
     monkeypatch.setattr(subscriptions.stripe_client, "fetch_current_subscription", watched_fetch)
