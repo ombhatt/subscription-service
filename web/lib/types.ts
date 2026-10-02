@@ -45,6 +45,8 @@ export interface Plan {
   tier: Tier;
   display_name: string;
   purchasable: boolean;
+  /** Sold by a conversation: "Custom" and Contact sales, not a price. */
+  sales_led: boolean;
   features: Entitlements["features"];
   quotas: { key: string; limit: number | null; window: string }[];
   prices: Partial<Record<Interval, Price>>;

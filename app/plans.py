@@ -4,8 +4,10 @@ This file ships with the code and is reviewed in pull requests. Prices live in
 Stripe; *limits* live here. Nothing else in the codebase may hard-code a tier
 name or a numeric cap -- call `limits_for()` or read an entitlement set.
 
-Adding a tier should mean adding one entry here plus its price ids in the
-environment. If you find yourself editing a call site, the abstraction leaked.
+Adding a tier means adding it to `Tier`, `TIER_RANK` and `CATALOG` here, and,
+if it is purchasable, setting STRIPE_PRICE_<TIER>_MONTHLY and
+STRIPE_PRICE_<TIER>_ANNUAL (scripts/seed_stripe.py creates them and prints the
+lines). If you find yourself editing a call site, the abstraction leaked.
 """
 
 from __future__ import annotations
@@ -68,6 +70,9 @@ class TierDefinition:
     # it as `tier is not Tier.FREE` -- a rule that silently became wrong the
     # moment a second non-purchasable tier existed.
     purchasable: bool = True
+    # Sold by a conversation, not a price: the pricing page shows "Custom" and
+    # a Contact sales button. Free is not purchasable either, but is not this.
+    sales_led: bool = False
 
 
 def _q(key: str, limit: int | None, window: QuotaWindow = QuotaWindow.DAILY) -> Quota:
@@ -125,6 +130,7 @@ CATALOG: dict[Tier, TierDefinition] = {
         tier=Tier.ENTERPRISE,
         display_name="Enterprise",
         purchasable=False,
+        sales_led=True,
         # No platform caps. Deliberate, and worth stating plainly: an
         # Enterprise agreement is negotiated in a contract, not enforced by
         # this table. If per-customer limits ever need enforcing, that is a
@@ -144,7 +150,8 @@ CATALOG: dict[Tier, TierDefinition] = {
     ),
 }
 
-PAID_TIERS = (Tier.PLUS, Tier.PRO)
+# Self-serve tiers, in catalog order: the ones with Stripe prices.
+PURCHASABLE_TIERS: tuple[Tier, ...] = tuple(t for t, d in CATALOG.items() if d.purchasable)
 
 
 def limits_for(tier: Tier) -> TierDefinition:
@@ -171,14 +178,19 @@ def price_catalog() -> dict[str, tuple[Tier, BillingInterval]]:
     That fallback is what keeps existing subscribers on their old price working
     after you change what you charge.
     """
-    s = get_settings()
-    mapping = {
-        s.stripe_price_plus_monthly: (Tier.PLUS, BillingInterval.MONTHLY),
-        s.stripe_price_plus_annual: (Tier.PLUS, BillingInterval.ANNUAL),
-        s.stripe_price_pro_monthly: (Tier.PRO, BillingInterval.MONTHLY),
-        s.stripe_price_pro_annual: (Tier.PRO, BillingInterval.ANNUAL),
-    }
-    return {price_id: value for price_id, value in mapping.items() if price_id}
+    configured = get_settings().stripe_price_ids
+    catalog: dict[str, tuple[Tier, BillingInterval]] = {}
+    for tier in PURCHASABLE_TIERS:
+        for interval in BillingInterval:
+            price_id = configured.get(f"{tier.value}_{interval.value}")
+            if price_id:
+                catalog[price_id] = (tier, interval)
+    return catalog
+
+
+def price_env_name(tier: Tier, interval: BillingInterval) -> str:
+    """The variable a tier's price id is read from: STRIPE_PRICE_PLUS_MONTHLY."""
+    return f"STRIPE_PRICE_{tier.value}_{interval.value}".upper()
 
 
 def price_id_for(tier: Tier, interval: BillingInterval) -> str | None:

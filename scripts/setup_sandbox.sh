@@ -266,17 +266,17 @@ while IFS= read -r line; do
 done < <("$PY" - <<'PY'
 import stripe
 from app.config import get_settings
-from app.plans import BillingInterval, Tier
+from app.plans import PURCHASABLE_TIERS, BillingInterval, price_env_name
 
 settings = get_settings()
 stripe.api_key = settings.stripe_secret_key
-for tier in (Tier.PLUS, Tier.PRO):
+for tier in PURCHASABLE_TIERS:
     for interval in BillingInterval:
         found = stripe.Price.list(
             lookup_keys=[f"{tier.value}_{interval.value}"], active=True, limit=1
         ).data
         if found:
-            print(f"STRIPE_PRICE_{tier.value.upper()}_{interval.value.upper()}={found[0].id}")
+            print(f"{price_env_name(tier, interval)}={found[0].id}")
 PY
 )
 
@@ -319,8 +319,12 @@ stage "GitHub Actions secrets"
 say "CI runs the test-clock suite against this sandbox: nightly, and on pull"
 say "requests that touch the service."
 set_secret STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY"
-for key in STRIPE_PRICE_PLUS_MONTHLY STRIPE_PRICE_PLUS_ANNUAL \
-           STRIPE_PRICE_PRO_MONTHLY STRIPE_PRICE_PRO_ANNUAL; do
+# Every price stage 3 wrote, one per purchasable tier and interval. A workflow
+# only sees the secrets it names, so a new tier also needs its two lines in
+# .github/workflows/stripe-sandbox.yml.
+keys=$(grep -oE '^STRIPE_PRICE_[A-Z0-9]+_(MONTHLY|ANNUAL)=' "$ENV_FILE" | tr -d '=' | sort -u || true)
+[[ -n "$keys" ]] || warn "no STRIPE_PRICE_* lines in .env"
+for key in $keys; do
   value=$(grep -E "^${key}=" "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)
   if [[ -n "$value" ]]; then set_secret "$key" "$value"; else warn "no $key in .env"; fi
 done
