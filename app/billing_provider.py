@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
-from app.models import PAID_STATUSES, SubscriptionStatus
+from app.models import SubscriptionStatus
 from app.plans import BillingInterval
 
 
@@ -57,7 +57,7 @@ class RemoteSubscription:
 
     @property
     def grants_access(self) -> bool:
-        return self.status in PAID_STATUSES
+        return self.status.grants_access
 
 
 @dataclass(frozen=True)

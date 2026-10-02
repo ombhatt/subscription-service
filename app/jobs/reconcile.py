@@ -40,7 +40,7 @@ from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import (
     ORPHANED_AT,
     belongs_to_this_service,
-    resolve_tier,
+    project,
     sync_subscription_from_stripe,
 )
 
@@ -212,15 +212,10 @@ async def _reconcile_one(
         )
         return True
 
-    expected_tier, _ = resolve_tier(remote.price)
-
-    status_matches = local.status == remote.status.value
-    tier_should_be = (
-        expected_tier.value if (remote.grants_access and expected_tier is not None) else "free"
-    )
-    tier_matches = local.tier == tier_should_be
-
-    if status_matches and tier_matches:
+    # What sync would write. Compared on tier and status, the two fields that
+    # decide access; dates and discounts are refreshed by the next webhook.
+    expected = project(remote)
+    if local.tier == expected.tier.value and local.status == expected.status.value:
         return False
 
     report.mismatched += 1
@@ -229,7 +224,7 @@ async def _reconcile_one(
             "user_id": local.user_id,
             "stripe_customer_id": customer_id,
             "local": {"tier": local.tier, "status": local.status},
-            "stripe": {"tier": tier_should_be, "status": remote.provider_status},
+            "stripe": {"tier": expected.tier.value, "status": remote.provider_status},
         }
     )
     if dry_run:

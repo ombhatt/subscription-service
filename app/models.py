@@ -46,12 +46,17 @@ class SubscriptionStatus(StrEnum):
     INCOMPLETE = "incomplete"
     PAUSED = "paused"
 
+    @property
+    def grants_access(self) -> bool:
+        return self in PAID_STATUSES
+
 
 PAID_STATUSES = (
     SubscriptionStatus.TRIALING,
     SubscriptionStatus.ACTIVE,
     SubscriptionStatus.PAST_DUE,
 )
+_PAID_VALUES = frozenset(s.value for s in PAID_STATUSES)
 
 
 class Subscription(Base):
@@ -98,6 +103,13 @@ class Subscription(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    @property
+    def grants_access(self) -> bool:
+        """Whether the mirrored status is one that pays for a tier. Not the
+        whole answer to "may they use it": the grace window is the read path's
+        to apply (see services/entitlements.py)."""
+        return self.status in _PAID_VALUES
 
 
 class ProcessedEvent(Base):
