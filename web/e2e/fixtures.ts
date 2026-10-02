@@ -68,7 +68,7 @@ const DISPLAY: Record<Tier, string> = {
 
 export interface FakeState {
   tier: Tier;
-  status: string;
+  status: Entitlements["status"];
   source: Entitlements["source"];
   messagesUsed: number;
   currentPeriodEnd: string | null;

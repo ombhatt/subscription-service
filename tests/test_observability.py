@@ -193,7 +193,7 @@ async def test_a_quota_rejection_is_counted(client, session):
     from app.services.entitlements import resolve_entitlements
 
     ents = await resolve_entitlements(session, "quota-metrics-user")
-    limit = next(q["limit"] for q in ents["quotas"] if q["key"] == "messages_per_day")
+    limit = ents.quota("messages_per_day").limit
 
     before = counter_value(quota_rejections, quota="messages_per_day", tier="free")
     for _ in range(limit):

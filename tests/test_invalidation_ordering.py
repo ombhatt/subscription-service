@@ -68,14 +68,14 @@ async def test_a_reader_between_the_write_and_the_commit_does_not_win(
 
         # A concurrent request lands mid-transaction and caches what it sees.
         stale = await resolve_entitlements(reader, USER)
-        assert stale["tier"] == "free", "precondition: the write is not committed yet"
+        assert stale.tier == "free", "precondition: the write is not committed yet"
 
         # The handler finishes.
         await commit_and_invalidate(writer)
 
         # The cached answer must be gone, not merely outdated.
         fresh = await resolve_entitlements(reader, USER)
-        assert fresh["tier"] == "pro", (
+        assert fresh.tier == "pro", (
             "a paying customer is still being served their old tier -- the "
             "invalidation ran before the commit and a reader repopulated it"
         )
@@ -191,7 +191,7 @@ async def _paid_but_cached_as_free(sessionmaker_, stripe) -> None:
     stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
 
     async with sessionmaker_() as reader:
-        assert (await resolve_entitlements(reader, USER))["tier"] == "free"
+        assert (await resolve_entitlements(reader, USER)).tier == "free"
 
     stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
 
@@ -208,7 +208,7 @@ async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker
     assert response.json()["tier"] == "pro"
 
     async with sessionmaker_() as reader:
-        assert (await resolve_entitlements(reader, USER))["tier"] == "pro", (
+        assert (await resolve_entitlements(reader, USER)).tier == "pro", (
             "the resync repaired the row but the API still serves the cached tier"
         )
 
@@ -222,6 +222,6 @@ async def test_a_reconcile_repair_invalidates_after_its_commit(sessionmaker_, st
     assert report.repaired == 1
 
     async with sessionmaker_() as reader:
-        assert (await resolve_entitlements(reader, USER))["tier"] == "pro", (
+        assert (await resolve_entitlements(reader, USER)).tier == "pro", (
             "reconcile repaired the row but the API still serves the cached tier"
         )

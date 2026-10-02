@@ -6,8 +6,6 @@ Delete this router once your real endpoints do the same thing.
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import CurrentUser, get_current_user
 from app.db import get_session
 from app.errors import FeatureNotEntitled
+from app.schemas import ChatQuota, ChatReply
 from app.services import quota
 from app.services.entitlements import (
-    feature,
+    Entitlements,
     minimum_tier_for_feature,
     resolve_entitlements,
 )
@@ -33,25 +32,24 @@ class ChatRequest(BaseModel):
 async def entitlements(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
+) -> Entitlements:
     """Injectable entitlement set. Cheap -- served from cache on almost every
     request -- so there is no reason for a handler not to ask."""
     return await resolve_entitlements(session, user.id)
 
 
-@router.post("/chat")
+@router.post("/chat", response_model=ChatReply)
 async def chat(
     body: ChatRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    ents: dict[str, Any] = Depends(entitlements),
-) -> dict:
-    allowed_models = feature(ents, "models", [])
-    if body.model not in allowed_models:
+    ents: Entitlements = Depends(entitlements),
+) -> ChatReply:
+    if body.model not in ents.features.models:
         required = minimum_tier_for_feature("models", body.model)
         raise FeatureNotEntitled(
             feature=f"model:{body.model}",
-            current_tier=ents["tier"],
+            current_tier=ents.tier.value,
             required_tier=required.value if required else None,
         )
 
@@ -61,13 +59,13 @@ async def chat(
         session, user_id=user.id, key="messages_per_day", entitlements=ents
     )
 
-    return {
-        "model": body.model,
-        "reply": f"[{ents['tier']}] echo: {body.message}",
-        "quota": {
-            "key": state["key"],
-            "limit": state["limit"],
-            "used": state["used"],
-            "remaining": state["remaining"],
-        },
-    }
+    return ChatReply(
+        model=body.model,
+        reply=f"[{ents.tier.value}] echo: {body.message}",
+        quota=ChatQuota(
+            key=state["key"],
+            limit=state["limit"],
+            used=state["used"],
+            remaining=state["remaining"],
+        ),
+    )

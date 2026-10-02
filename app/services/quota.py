@@ -25,16 +25,10 @@ from app.errors import QuotaExceeded
 from app.models import UsageCounter
 from app.observability import quota_rejections
 from app.plans import CATALOG, TIER_RANK, QuotaWindow, Tier
-from app.services.entitlements import quota_limit
+from app.services.entitlements import Entitlements
+from app.timeutil import as_utc
 
 log = logging.getLogger(__name__)
-
-
-def _parse(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def _calendar_month(now: datetime) -> tuple[datetime, datetime]:
@@ -44,15 +38,15 @@ def _calendar_month(now: datetime) -> tuple[datetime, datetime]:
 
 
 def window_for(
-    window: str, entitlements: dict[str, Any], now: datetime | None = None
+    window: QuotaWindow, entitlements: Entitlements, now: datetime | None = None
 ) -> tuple[datetime, datetime]:
     now = now or datetime.now(UTC)
-    if window == QuotaWindow.DAILY.value:
+    if window is QuotaWindow.DAILY:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1)
 
-    start = _parse(entitlements.get("current_period_start"))
-    end = _parse(entitlements.get("current_period_end"))
+    start = as_utc(entitlements.current_period_start)
+    end = as_utc(entitlements.current_period_end)
     if start and end and start <= now < end:
         return start, end
     # Free users have no billing period; fall back to the calendar month so the
@@ -89,13 +83,13 @@ def upgrade_tier_for(key: str, current: Tier) -> Tier | None:
     return None
 
 
-async def peek(user_id: str, key: str, entitlements: dict[str, Any]) -> dict[str, Any] | None:
+async def peek(user_id: str, key: str, entitlements: Entitlements) -> dict[str, Any] | None:
     """Current usage without consuming. None if this tier does not meter `key`."""
-    found = quota_limit(entitlements, key)
+    found = entitlements.quota(key)
     if found is None:
         return None
-    limit, window = found
-    start, end = window_for(window, entitlements)
+    limit = found.limit
+    start, end = window_for(found.window, entitlements)
     used = await get_cache().get_int(_counter_key(user_id, key, start))
     return {
         "key": key,
@@ -106,10 +100,10 @@ async def peek(user_id: str, key: str, entitlements: dict[str, Any]) -> dict[str
     }
 
 
-async def states(user_id: str, entitlements: dict[str, Any]) -> list[dict[str, Any]]:
+async def states(user_id: str, entitlements: Entitlements) -> list[dict[str, Any]]:
     out = []
-    for quota in entitlements.get("quotas", []):
-        state = await peek(user_id, quota["key"], entitlements)
+    for quota in entitlements.quotas:
+        state = await peek(user_id, quota.key, entitlements)
         if state is not None:
             out.append(state)
     return out
@@ -120,7 +114,7 @@ async def consume(
     *,
     user_id: str,
     key: str,
-    entitlements: dict[str, Any],
+    entitlements: Entitlements,
 ) -> dict[str, Any]:
     """Record one unit of usage, or raise QuotaExceeded.
 
@@ -131,17 +125,17 @@ async def consume(
     transaction; `session` is used only to find the database, and the durable
     mirror is written in a transaction of its own (see `_mirror`).
     """
-    found = quota_limit(entitlements, key)
+    found = entitlements.quota(key)
     if found is None:
         return {"key": key, "limit": None, "used": 0, "remaining": None}
 
-    limit, window = found
-    start, end = window_for(window, entitlements)
+    limit = found.limit
+    start, end = window_for(found.window, entitlements)
     ttl = max(60, int((end - datetime.now(UTC)).total_seconds()))
     used = await get_cache().incr(_counter_key(user_id, key, start), ttl)
 
     if limit is not None and used > limit:
-        current = Tier(entitlements["tier"])
+        current = entitlements.tier
         quota_rejections.labels(quota=key, tier=current.value).inc()
         raise QuotaExceeded(
             key=key,
