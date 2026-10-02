@@ -66,8 +66,9 @@ class ReconcileReport:
     # the run carried on, so they may still be on the wrong tier.
     failed: list[str] = field(default_factory=list)
     # Subscriptions in this Stripe account that belong to another application.
-    # Counted rather than listed: it is a property of the account, not a problem
-    # to work through, and on a shared account it is most of the page.
+    # Zero on an account of our own. Counted rather than listed: it is a
+    # property of the account, not a problem to work through, and on a shared
+    # account it is most of the page.
     ignored: int = 0
     unknown_customers: list[str] = field(default_factory=list)
     details: list[dict] = field(default_factory=list)

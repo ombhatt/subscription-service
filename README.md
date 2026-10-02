@@ -2,8 +2,9 @@
 
 [![CI](https://github.com/ombhatt/subscription-service/actions/workflows/ci.yml/badge.svg)](https://github.com/ombhatt/subscription-service/actions/workflows/ci.yml)
 
-Flat-price **Free / Plus / Pro** subscriptions on Stripe Billing, with FastAPI,
-Postgres, Supabase Auth and a Next.js frontend.
+Flat-price **Free / Plus / Pro** subscriptions on Stripe Billing, plus a
+sales-led **Enterprise** tier, with FastAPI, Postgres, Supabase Auth and a
+Next.js frontend.
 
 Changes reach `main` through pull requests that CI has passed — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -293,8 +294,9 @@ is premature.
 
 ### Sharing a Stripe account
 
-A Stripe account can serve more than one application, and this one's does. That
-matters more than it sounds: webhooks are delivered per *account*, the
+A Stripe account can serve more than one application, and this one's used to:
+it shared a sandbox with another product until `scripts/setup_sandbox.sh` gave
+it one of its own. That matters more than it sounds: webhooks are delivered per *account*, the
 reconciliation job lists every subscription in the account, and other people's
 customers carry `metadata.user_id` too -- the very key this service resolves an
 unknown customer by. Left alone, a neighbouring product's subscriber becomes a
@@ -308,9 +310,10 @@ drift. An existing local row is never dropped by this rule; it only applies
 before a row exists, so a subscriber on a price we have since retired is still
 ours to mirror.
 
-Neater still is one Stripe account per application, and that is the right shape
-before going live: it separates webhook traffic, portal configurations and price
-namespaces, and no rule in this repo can be got wrong.
+The rule stays as a guard. One Stripe account per application is the right
+shape, in the sandbox and in live mode: it separates webhook traffic, portal
+configurations and price namespaces, and no rule in this repo can be got
+wrong.
 
 ## Connecting to Postgres
 
@@ -356,9 +359,16 @@ app/
   plans.py             tier -> limits. The only definition of a tier.
   policy.py            grace-window rules, shared by both paths
   auth.py              Supabase JWT verification; the admin key
-  models.py            5 tables (below)
+  models.py            6 tables (below)
   db.py                engine settings, including the pooler routes
   stripe_client.py     the only module that imports `stripe`
+  cache.py             Redis or in-process: entitlement cache, atomic counters
+  accounts.py          does a Supabase account still exist? (reconcile only)
+  notify.py            operator alert email over SMTP
+  ratelimit.py         fixed windows for the one public write
+  flags.py             GrowthBook feature flags
+  health.py            liveness and readiness probes
+  observability.py     JSON logs, request ids, Prometheus metrics
   services/
     subscriptions.py   the write path; sync_subscription_from_stripe
     entitlements.py    the read path; resolve + cache + fail open
@@ -375,7 +385,15 @@ app/
     reconcile.py       nightly drift check against Stripe
     expire_grace.py    nightly dunning cut-off
 scripts/
+  setup_sandbox.sh         wizard: a Stripe sandbox of this service's own
+  setup_email.sh           wizard: Resend SMTP for the alert email
+  setup_local_db.sh        the role and database DATABASE_URL expects, locally
   seed_stripe.py           products + prices, checked in rather than clicked
+  configure_portal.py      the customer portal's plan list, from plans.py
+  prune_sandbox_rows.py    rows whose customer lives in an old sandbox
+  check_db_role.py         what the DATABASE_URL credential can actually do
+  ci_db_role.sql           the role CI connects as, and what it may touch
+  cleanup_ci_schemas.py    drops schemas an interrupted CI run left behind
   cleanup_test_clocks.py   removes clocks an interrupted run left behind
 ```
 
@@ -387,6 +405,7 @@ scripts/
 | `processed_events` | webhook de-duplication, keyed by Stripe's event id |
 | `usage_counters` | durable mirror of the Redis counters, for support and analytics |
 | `entitlement_grants` | comps and staff accounts; resolution takes the higher of grant and subscription |
+| `sales_inquiries` | Enterprise leads from the contact-sales form, worked through the admin API |
 | `subscription_audit` | append-only transitions with the causing event id |
 
 ## Tests
@@ -702,9 +721,10 @@ carries `mismatched` as a field.
 
 ## What is deliberately not here
 
-Team seats, usage-based overage, enterprise or custom plans, multi-currency,
-self-serve refunds, in-house invoice PDFs, coupon management screens, and rate
-limiting.
+Team seats, usage-based overage, per-customer limits for Enterprise,
+multi-currency, self-serve refunds, in-house invoice PDFs, coupon management
+screens, and general rate limiting -- only the contact-sales form is throttled
+in-app; the rest belongs at the edge.
 
 Seats are the one deferred item that changes the schema — a subscription stops
 belonging to a user — so if teams are on the roadmap, say so before this grows
