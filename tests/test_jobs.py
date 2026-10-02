@@ -167,7 +167,7 @@ async def test_one_customer_failing_does_not_undo_the_others(
     async def flaky(customer_id):
         if customer_id == "cus_b":
             raise ConnectionError("stripe timed out for this one customer")
-        return stripe.subscriptions.get(customer_id)
+        return await stripe.fetch_current_subscription(customer_id)
 
     monkeypatch.setattr(stripe_client, "fetch_current_subscription", flaky)
 
@@ -847,3 +847,17 @@ def test_a_sub_second_window_is_not_cached_at_all():
 def test_a_boundary_already_passed_needs_no_cap():
     """Past the window the answer is stable again -- free, and staying free."""
     assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
+
+
+async def test_a_status_stripe_adds_later_is_not_drift_every_night(session, stripe):
+    """Sync stores an unrecognised Stripe status as free. Reconcile used to
+    translate it separately, to nothing, so the row never matched: reported and
+    re-synced on every run, forever. One translation now serves both."""
+    await seed(session)
+    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
+    stripe.set_subscription("cus_1", status="some_new_status", price_id="price_pro_m")
+
+    first = await reconcile(session)
+    second = await reconcile(session)
+
+    assert (first.mismatched, second.mismatched) == (0, 0)

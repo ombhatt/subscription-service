@@ -9,12 +9,21 @@ thread so it cannot block the event loop.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import stripe
 from stripe._http_client import RequestsClient
 
+from app.billing_provider import (
+    RemoteCustomer,
+    RemotePrice,
+    RemoteSubscription,
+    SubscriptionPage,
+)
 from app.config import get_settings
+from app.models import SubscriptionStatus
+from app.plans import BillingInterval
 
 _http_client: Any = None
 
@@ -140,7 +149,7 @@ async def create_checkout_session(
     return _as_dict(session)
 
 
-async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> dict:
+async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> None:
     """Schedule a cancellation for the end of the paid period, or undo one.
 
     Deliberately not `Subscription.delete`: that ends the subscription now, and
@@ -149,19 +158,17 @@ async def set_cancel_at_period_end(subscription_id: str, value: bool = True) -> 
     drops them to free.
     """
     api = _client()
-    return _as_dict(
-        await _call(api.Subscription.modify, subscription_id, cancel_at_period_end=value)
-    )
+    await _call(api.Subscription.modify, subscription_id, cancel_at_period_end=value)
 
 
-async def set_subscription_metadata(subscription_id: str, metadata: dict[str, str]) -> dict:
+async def set_subscription_metadata(subscription_id: str, metadata: dict[str, str]) -> None:
     """Merge keys into a subscription's metadata. An empty string removes a key.
 
     Stripe merges rather than replaces, so keys this service does not own --
     `user_id`, or anything a person added in the Dashboard -- are left alone.
     """
     api = _client()
-    return _as_dict(await _call(api.Subscription.modify, subscription_id, metadata=metadata))
+    await _call(api.Subscription.modify, subscription_id, metadata=metadata)
 
 
 async def create_portal_session(
@@ -192,12 +199,28 @@ async def create_portal_session(
 # reads
 # --------------------------------------------------------------------------
 
+# Stripe's vocabulary -> ours. Anything unlisted is treated as no paid access.
+_STATUSES: dict[str, SubscriptionStatus] = {
+    "active": SubscriptionStatus.ACTIVE,
+    "trialing": SubscriptionStatus.TRIALING,
+    "past_due": SubscriptionStatus.PAST_DUE,
+    "unpaid": SubscriptionStatus.PAST_DUE,
+    "paused": SubscriptionStatus.PAUSED,
+    "incomplete": SubscriptionStatus.INCOMPLETE,
+    "incomplete_expired": SubscriptionStatus.FREE,
+    "canceled": SubscriptionStatus.FREE,
+}
+
+# Finished for good: Stripe keeps returning these objects, but nothing will
+# ever charge them again.
+_ENDED = frozenset({"canceled", "incomplete_expired"})
+
 # Ordered by how much they should win when a customer somehow has more than one
 # subscription object; the first match is the one we mirror.
 _STATUS_PRIORITY = ("active", "trialing", "past_due", "unpaid", "paused", "incomplete")
 
 
-async def fetch_current_subscription(customer_id: str) -> dict | None:
+async def fetch_current_subscription(customer_id: str) -> RemoteSubscription | None:
     """The customer's current subscription as Stripe sees it, or None.
 
     Deliberately re-reads rather than trusting a webhook payload: events arrive
@@ -218,6 +241,10 @@ async def fetch_current_subscription(customer_id: str) -> dict | None:
     if not subscriptions:
         return None
 
+    return parse_subscription(_current(subscriptions))
+
+
+def _current(subscriptions: list[dict]) -> dict:
     for status_name in _STATUS_PRIORITY:
         for sub in subscriptions:
             if sub.get("status") == status_name:
@@ -227,7 +254,9 @@ async def fetch_current_subscription(customer_id: str) -> dict | None:
     return max(subscriptions, key=lambda s: s.get("created") or 0)
 
 
-async def list_subscriptions_page(starting_after: str | None = None, limit: int = 100) -> dict:
+async def list_subscriptions_page(
+    starting_after: str | None = None, limit: int = 100
+) -> SubscriptionPage:
     """One page of every subscription on the account, for reconciliation."""
     api = _client()
     params: dict[str, Any] = {
@@ -237,7 +266,11 @@ async def list_subscriptions_page(starting_after: str | None = None, limit: int 
     }
     if starting_after:
         params["starting_after"] = starting_after
-    return _as_dict(await _call(api.Subscription.list, **params))
+    page = _as_dict(await _call(api.Subscription.list, **params))
+    return SubscriptionPage(
+        items=[parse_subscription(raw) for raw in page.get("data", [])],
+        has_more=bool(page.get("has_more")),
+    )
 
 
 async def retrieve_price(price_id: str) -> dict:
@@ -245,9 +278,9 @@ async def retrieve_price(price_id: str) -> dict:
     return _as_dict(await _call(api.Price.retrieve, price_id))
 
 
-async def retrieve_customer(customer_id: str) -> dict:
+async def retrieve_customer(customer_id: str) -> RemoteCustomer:
     api = _client()
-    return _as_dict(await _call(api.Customer.retrieve, customer_id))
+    return parse_customer(_as_dict(await _call(api.Customer.retrieve, customer_id)))
 
 
 async def retrieve_charge(charge_id: str) -> dict:
@@ -271,11 +304,64 @@ def construct_event(payload: bytes, signature: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# field helpers
+# parsing: Stripe's payloads -> this service's value objects
 # --------------------------------------------------------------------------
 
 
-def subscription_period(sub: dict) -> tuple[int | None, int | None]:
+def parse_subscription(raw: dict) -> RemoteSubscription:
+    """Everything the service reads from a Stripe subscription, in one place.
+
+    Tolerant of the shapes Stripe has used across API versions (see the helpers
+    below), and of unexpanded references: a customer or price may arrive as a
+    bare id.
+    """
+    stripe_status = raw.get("status") or ""
+    customer = raw.get("customer")
+    period_start, period_end = _period(raw)
+    items = (raw.get("items") or {}).get("data") or []
+    return RemoteSubscription(
+        id=raw["id"],
+        customer_id=customer.get("id") if isinstance(customer, dict) else customer,
+        status=_STATUSES.get(stripe_status, SubscriptionStatus.FREE),
+        provider_status=stripe_status,
+        ended=stripe_status in _ENDED,
+        price=_price(items[0].get("price")) if items else None,
+        item_ids=tuple(item["id"] for item in items if item.get("id")),
+        period_start=_ts(period_start),
+        period_end=_ts(period_end),
+        cancel_at_period_end=bool(raw.get("cancel_at_period_end")),
+        trial_end=_ts(raw.get("trial_end")),
+        discount=_discount(raw),
+        metadata=dict(raw.get("metadata") or {}),
+    )
+
+
+def parse_customer(raw: dict) -> RemoteCustomer:
+    return RemoteCustomer(id=raw["id"], user_id=(raw.get("metadata") or {}).get("user_id"))
+
+
+_INTERVALS = {"month": BillingInterval.MONTHLY, "year": BillingInterval.ANNUAL}
+
+
+def _price(price: dict | str | None) -> RemotePrice | None:
+    """The line item's price, expanded or not."""
+    if not price:
+        return None
+    if isinstance(price, str):
+        return RemotePrice(id=price, interval=None)
+    recurring = price.get("recurring") or {}
+    return RemotePrice(
+        id=price["id"],
+        interval=_INTERVALS.get(recurring.get("interval")),
+        tier=(price.get("metadata") or {}).get("tier") or None,
+    )
+
+
+def _ts(value: int | None) -> datetime | None:
+    return datetime.fromtimestamp(value, tz=UTC) if value else None
+
+
+def _period(sub: dict) -> tuple[int | None, int | None]:
     """(start, end) as unix timestamps.
 
     Recent Stripe API versions moved the billing period from the subscription
@@ -295,7 +381,7 @@ def subscription_period(sub: dict) -> tuple[int | None, int | None]:
     return None, None
 
 
-def subscription_discount(sub: dict) -> dict | None:
+def _discount(sub: dict) -> dict | None:
     """The discount on a subscription, flattened into something storable.
 
     Stripe moved from a single `discount` to a `discounts` array holding ids,
@@ -331,14 +417,3 @@ def subscription_discount(sub: dict) -> dict | None:
         "promotion_code": raw.get("promotion_code"),
         "ends_at": raw.get("end"),
     }
-
-
-def subscription_price(sub: dict) -> dict | None:
-    """The price object of the first line item, expanded or not."""
-    items = (sub.get("items") or {}).get("data") or []
-    if not items:
-        return None
-    price = items[0].get("price")
-    if isinstance(price, str):
-        return {"id": price}
-    return price

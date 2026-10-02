@@ -9,9 +9,11 @@ green. These tests use the SDK's own object type so that cannot recur.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from stripe import StripeObject
 
-from app.stripe_client import _as_dict, subscription_period, subscription_price
+from app.stripe_client import _as_dict, parse_subscription
 
 
 def as_stripe_object(payload: dict) -> StripeObject:
@@ -41,8 +43,12 @@ def test_plain_dicts_pass_through_unchanged():
     assert _as_dict(payload) == payload
 
 
+START = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+END = datetime.fromtimestamp(1_702_592_000, tz=UTC)
+
+
 def test_price_and_period_read_from_a_converted_object():
-    """The two helpers that actually walk the nested structure."""
+    """The parts of the parser that actually walk the nested structure."""
     obj = as_stripe_object(
         {
             "id": "sub_1",
@@ -53,8 +59,9 @@ def test_price_and_period_read_from_a_converted_object():
     )
     converted = _as_dict(obj)
 
-    assert subscription_price(converted)["id"] == "price_pro_m"
-    assert subscription_period(converted) == (1_700_000_000, 1_702_592_000)
+    remote = parse_subscription(converted)
+    assert remote.price.id == "price_pro_m"
+    assert (remote.period_start, remote.period_end) == (START, END)
 
 
 def test_period_falls_back_to_the_subscription_item():
@@ -75,4 +82,5 @@ def test_period_falls_back_to_the_subscription_item():
             }
         )
     )
-    assert subscription_period(converted) == (1_700_000_000, 1_702_592_000)
+    remote = parse_subscription(converted)
+    assert (remote.period_start, remote.period_end) == (START, END)
