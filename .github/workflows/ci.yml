@@ -128,8 +128,8 @@ jobs:
           fi
 
       # The migration credential's default search_path is `"$user", public`, so
-      # a schema named `postgres` -- which ci_runner can create -- is searched
-      # first. Planting an alembic_version there used to make migrations re-run
+      # a schema named `postgres` -- which ci_runner could create until
+      # scripts/ci_db_role.sql confined it -- is searched first. Planting an alembic_version there used to make migrations re-run
       # or skip, and send new tables into that schema (see alembic/env.py).
       - name: Migrations ignore a schema named after their role
         env:
@@ -148,6 +148,55 @@ jobs:
           ran=$(alembic upgrade head 2>&1 | grep "Running upgrade" || true)
           test -z "$ran" || { echo "::error::migrations re-ran from the planted version: $ran"; exit 1; }
           q "drop schema postgres cascade"
+
+      # scripts/ci_db_role.sql, applied the way Supabase runs it: by an admin
+      # that owns the database but is not a superuser, so it must grant itself
+      # SET on ci_runner before ci.create_schema() can hand schemas to it. It
+      # starts from what older versions left behind -- database-wide CREATE --
+      # to prove re-running the file takes that away.
+      - name: ci_runner can create only its own schemas
+        env:
+          PGPASSWORD: postgres
+        run: |
+          admin() { psql -h localhost -U postgres -d subscriptions -qX -v ON_ERROR_STOP=1 -c "$1"; }
+          admin "create role sbadmin login password 'sbadmin' createrole"
+          admin "create database ci_roles owner sbadmin"
+          as_admin() { PGPASSWORD=sbadmin psql -h localhost -U sbadmin -d ci_roles -qX -v ON_ERROR_STOP=1 "$@"; }
+          as_admin -c "create role ci_runner nologin; grant create on database ci_roles to ci_runner"
+          as_admin -f scripts/ci_db_role.sql
+          as_admin -f scripts/ci_db_role.sql   # idempotent
+
+          q() { psql -h localhost -U postgres -d ci_roles -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
+          fail=0
+          as_ci() { q "set role ci_runner; $1"; }
+          must_fail() { if as_ci "$2" >/dev/null 2>&1; then echo "::error::ci_runner could: $1"; fail=1; else echo "refused: $1"; fi; }
+
+          must_fail "create a schema directly"              "create schema ci_1700000000_abcdef01"
+          must_fail "create a schema named after a role"    "create schema postgres"
+          must_fail "create a table in public"              "create table public.planted (id int)"
+          must_fail "ask for a role-named schema"           "select ci.create_schema('app_service')"
+          must_fail "ask for a hand-made ci_ name"          "select ci.create_schema('ci_probe')"
+          must_fail "ask for a name with a newline"         "select ci.create_schema(e'ci_1700000000_abcdef01\nx')"
+          must_fail "ask for an injection"                  "select ci.create_schema('ci_1700000000_abcdef01\"; drop schema public; --')"
+          must_fail "ask for nothing"                       "select ci.create_schema(null)"
+          must_fail "add a function to the ci schema"       "create function ci.f() returns int language sql as 'select 1'"
+
+          name=ci_1700000000_abcdef01
+          as_ci "select ci.create_schema('$name')" >/dev/null || { echo "::error::ci.create_schema refused a generated name"; fail=1; }
+          owner=$(q "select pg_get_userbyid(nspowner) from pg_namespace where nspname = '$name'")
+          test "$owner" = ci_runner || { echo "::error::$name is owned by '$owner', not ci_runner"; fail=1; }
+          as_ci "create table $name.t (id int); insert into $name.t values (1); drop schema $name cascade" >/dev/null \
+            || { echo "::error::ci_runner cannot use and drop its own schema"; fail=1; }
+          echo "allowed: a generated schema, owned by ci_runner, used and dropped"
+
+          # Only ci_runner may call it: not PUBLIC (grantee 0), so not app_service either.
+          callers=$(q "select coalesce(string_agg(case a.grantee when 0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end, ',' order by 1), '')
+                       from pg_proc p, aclexplode(p.proacl) a
+                       where p.oid = 'ci.create_schema(text)'::regprocedure and a.privilege_type = 'EXECUTE'
+                         and a.grantee <> p.proowner")
+          test "$callers" = ci_runner || { echo "::error::EXECUTE on ci.create_schema is held by '$callers', not only ci_runner"; fail=1; }
+          echo "callers: $callers"
+          exit $fail
 
   web:
     name: web

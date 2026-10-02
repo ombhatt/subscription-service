@@ -40,6 +40,7 @@ os.environ["REDIS_URL"] = ""
 
 import stripe
 from dotenv import dotenv_values
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -162,7 +163,9 @@ async def engine(tmp_path_factory):
     schema = new_schema_name()
     base = create_async_engine(url, poolclass=NullPool, **engine_kwargs(url))
     async with base.begin() as conn:
-        await conn.exec_driver_sql(f'create schema "{schema}"')
+        # ci_runner cannot create schemas itself; this function makes one under a
+        # generated name only (scripts/ci_db_role.sql).
+        await conn.execute(text("select ci.create_schema(:name)"), {"name": schema})
     eng = base.execution_options(schema_translate_map={None: schema})
     try:
         async with eng.begin() as conn:
