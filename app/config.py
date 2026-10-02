@@ -1,10 +1,16 @@
+import os
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PRICE_PREFIX = "stripe_price_"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # `allow` so that undeclared STRIPE_PRICE_* lines in .env are kept; see
+    # stripe_price_ids. Anything else extra is kept too, and never read.
+    model_config = SettingsConfigDict(env_file=".env", extra="allow")
 
     environment: str = "development"
 
@@ -78,10 +84,11 @@ class Settings(BaseSettings):
     # from this repo's catalogue with `python -m scripts.configure_portal`.
     stripe_portal_configuration_id: str = ""
 
-    stripe_price_plus_monthly: str = ""
-    stripe_price_plus_annual: str = ""
-    stripe_price_pro_monthly: str = ""
-    stripe_price_pro_annual: str = ""
+    # Stripe price ids by "<tier>_<interval>", e.g. "plus_monthly", from
+    # variables named STRIPE_PRICE_<TIER>_<INTERVAL>. Collected by convention
+    # rather than declared one field per price, so a tier added to plans.py
+    # needs its variables set and nothing changed here. See _collect_price_ids.
+    stripe_price_ids: dict[str, str] = {}
 
     checkout_success_url: str = "http://localhost:3000/billing/success"
     checkout_cancel_url: str = "http://localhost:3000/billing"
@@ -121,6 +128,22 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+
+    @model_validator(mode="after")
+    def _collect_price_ids(self) -> "Settings":
+        """pydantic-settings keeps undeclared keys from .env (in model_extra)
+        but drops undeclared environment variables -- which is how production
+        is configured. So both are read here, the environment winning, as it
+        does for every declared field."""
+        found: dict[str, str] = {}
+        for source in (self.model_extra or {}, os.environ):
+            for key, value in source.items():
+                name = key.lower()
+                if name.startswith(PRICE_PREFIX) and name != "stripe_price_ids" and value:
+                    found[name.removeprefix(PRICE_PREFIX)] = str(value)
+        self.stripe_price_ids = found
+        return self
 
 
 @lru_cache

@@ -173,6 +173,8 @@ export class FakeApi {
       tier,
       display_name: DISPLAY[tier],
       purchasable: tier !== "free" && tier !== "enterprise",
+      // Mirrors app/plans.py, which the API serves this from.
+      sales_led: tier === "enterprise",
       features: FEATURES[tier],
       quotas: [
         { key: "messages_per_day", limit: MESSAGE_LIMITS[tier], window: "daily" },

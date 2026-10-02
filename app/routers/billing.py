@@ -14,7 +14,15 @@ from app.flags import is_enabled
 from app.models import SalesInquiry, Subscription
 from app.observability import event as log_event
 from app.observability import sales_inquiries
-from app.plans import CATALOG, TIER_RANK, BillingInterval, Tier, price_id_for
+from app.plans import (
+    CATALOG,
+    PURCHASABLE_TIERS,
+    TIER_RANK,
+    BillingInterval,
+    Tier,
+    price_catalog,
+    price_id_for,
+)
 from app.ratelimit import contact_sales_rate_limit
 from app.schemas import (
     CheckoutRequest,
@@ -39,7 +47,8 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
 
-_PLANS_CACHE_KEY = "plans:v1"
+# Bumped whenever the payload's shape changes, so a cached old one is not served.
+_PLANS_CACHE_KEY = "plans:v2"
 _PLANS_CACHE_TTL = 300
 
 
@@ -73,6 +82,7 @@ async def plans() -> list[dict]:
                 "tier": tier.value,
                 "display_name": definition.display_name,
                 "purchasable": definition.purchasable,
+                "sales_led": definition.sales_led,
                 "features": definition.features,
                 "quotas": [
                     {"key": q.key, "limit": q.limit, "window": q.window.value}
@@ -223,11 +233,11 @@ async def billing_health() -> dict:
     """Cheap config check: are the prices this service needs actually set?"""
     missing = [
         f"{tier.value}/{interval.value}"
-        for tier in (Tier.PLUS, Tier.PRO)
+        for tier in PURCHASABLE_TIERS
         for interval in BillingInterval
         if not price_id_for(tier, interval)
     ]
-    if missing and len(missing) == 4:
+    if not price_catalog():
         raise BillingError("no Stripe prices configured; run scripts/seed_stripe.py", code=503)
     return {"status": "ok", "unconfigured_prices": missing}
 

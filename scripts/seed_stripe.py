@@ -22,7 +22,7 @@ from pathlib import Path
 import stripe
 
 from app.config import get_settings
-from app.plans import BillingInterval, Tier
+from app.plans import CATALOG, PURCHASABLE_TIERS, BillingInterval, Tier, price_env_name
 
 # Amounts live here rather than in plans.py because Stripe owns pricing once
 # these exist; edit, re-run, and the new price becomes the one new customers
@@ -35,19 +35,15 @@ AMOUNTS: dict[tuple[Tier, BillingInterval], int] = {
 }
 
 CURRENCY = "usd"
-PRODUCT_IDS = {Tier.PLUS: "tier_plus", Tier.PRO: "tier_pro"}
-PRODUCT_NAMES = {Tier.PLUS: "Plus", Tier.PRO: "Pro"}
 INTERVALS = {BillingInterval.MONTHLY: "month", BillingInterval.ANNUAL: "year"}
-ENV_NAMES = {
-    (Tier.PLUS, BillingInterval.MONTHLY): "STRIPE_PRICE_PLUS_MONTHLY",
-    (Tier.PLUS, BillingInterval.ANNUAL): "STRIPE_PRICE_PLUS_ANNUAL",
-    (Tier.PRO, BillingInterval.MONTHLY): "STRIPE_PRICE_PRO_MONTHLY",
-    (Tier.PRO, BillingInterval.ANNUAL): "STRIPE_PRICE_PRO_ANNUAL",
-}
+
+
+def product_id_for(tier: Tier) -> str:
+    return f"tier_{tier.value}"
 
 
 def ensure_product(tier: Tier, dry_run: bool) -> str:
-    product_id = PRODUCT_IDS[tier]
+    product_id = product_id_for(tier)
     try:
         product = stripe.Product.retrieve(product_id)
         print(f"  product {product_id}: exists")
@@ -61,7 +57,7 @@ def ensure_product(tier: Tier, dry_run: bool) -> str:
 
     product = stripe.Product.create(
         id=product_id,
-        name=PRODUCT_NAMES[tier],
+        name=CATALOG[tier].display_name,
         metadata={"tier": tier.value},
     )
     print(f"  product {product_id}: created")
@@ -126,13 +122,23 @@ def main() -> int:
     if settings.stripe_api_version:
         stripe.api_version = settings.stripe_api_version
 
+    unpriced = [
+        f"{tier.value}/{interval.value}"
+        for tier in PURCHASABLE_TIERS
+        for interval in BillingInterval
+        if (tier, interval) not in AMOUNTS
+    ]
+    if unpriced:
+        print(f"No amount in AMOUNTS for: {', '.join(unpriced)}. Add them and re-run.")
+        return 1
+
     env_lines: list[str] = []
-    for tier in (Tier.PLUS, Tier.PRO):
+    for tier in PURCHASABLE_TIERS:
         print(f"{tier.value}:")
         product_id = ensure_product(tier, args.dry_run)
         for interval in BillingInterval:
             price_id = ensure_price(tier, interval, product_id, args.dry_run)
-            env_lines.append(f"{ENV_NAMES[(tier, interval)]}={price_id}")
+            env_lines.append(f"{price_env_name(tier, interval)}={price_id}")
 
     print("\nAdd these to .env:\n")
     print("\n".join(env_lines))

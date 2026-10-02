@@ -151,7 +151,7 @@ export default function PricingPage() {
                   // Both Free and Enterprise are non-purchasable, and they read
                   // nothing alike. The old branch said "Free" for anything
                   // without a price, which would have priced Enterprise at zero.
-                  <span className="price-now">{plan.tier === "free" ? "Free" : "Custom"}</span>
+                  <span className="price-now">{plan.sales_led ? "Custom" : "Free"}</span>
                 )}
               </div>
 
@@ -187,7 +187,7 @@ export default function PricingPage() {
               <div className="actions">
                 {isCurrent ? (
                   <button disabled>Current plan</button>
-                ) : plan.tier === "enterprise" ? (
+                ) : plan.sales_led ? (
                   // Checked before the subscriber branch on purpose. Stripe's
                   // portal can only move someone between prices it knows about,
                   // and Enterprise has none -- so "Change in portal" was both
