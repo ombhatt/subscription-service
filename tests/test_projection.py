@@ -81,7 +81,11 @@ def test_an_unrecognised_price_is_never_guessed_upward():
 
 
 def test_a_retired_price_resolves_through_its_tier_tag():
-    retired = {"id": "price_retired", "recurring": {"interval": "year"}, "metadata": {"tier": "plus"}}
+    retired = {
+        "id": "price_retired",
+        "recurring": {"interval": "year"},
+        "metadata": {"tier": "plus"},
+    }
     state = project(remote("active", retired))
     assert state.tier is Tier.PLUS
     assert state.billing_interval.value == "annual"
