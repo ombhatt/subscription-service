@@ -29,26 +29,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stripe_client
 from app.accounts import AccountDirectory, SupabaseAccounts
+from app.billing_provider import RemoteSubscription
 from app.config import get_settings
 from app.db import dispose_engine, get_sessionmaker
-from app.models import PAID_STATUSES, Subscription
+from app.models import Subscription
 from app.notify import Notifier, email_notifier
 from app.observability import configure_logging, reconciliation_drift
 from app.observability import event as log_event
 from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import (
     ORPHANED_AT,
-    STATUS_MAP,
     belongs_to_this_service,
     resolve_tier,
     sync_subscription_from_stripe,
 )
 
 log = logging.getLogger(__name__)
-
-# Stripe statuses that can no longer take money. Anything else can still renew,
-# retry a card or collect an open invoice.
-CLOSED_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
 # Written to an orphaned subscription's metadata in Stripe, where someone would
 # go to cancel or refund it. The first says when reconcile found it; the second,
@@ -129,15 +125,12 @@ async def reconcile(
 
     while True:
         page = await stripe_client.list_subscriptions_page(starting_after=starting_after)
-        rows = page.get("data", [])
-        if not rows:
+        if not page.items:
             break
 
-        for remote in rows:
+        for remote in page.items:
             report.checked += 1
-            customer_id = remote.get("customer")
-            if isinstance(customer_id, dict):
-                customer_id = customer_id.get("id")
+            customer_id = remote.customer_id
             if not customer_id:
                 continue
 
@@ -163,9 +156,9 @@ async def reconcile(
             if repaired:
                 report.repaired += 1
 
-        if not page.get("has_more"):
+        if not page.has_more:
             break
-        starting_after = rows[-1]["id"]
+        starting_after = page.items[-1].id
 
     if not dry_run:
         await _notify(report, notifier)
@@ -174,7 +167,7 @@ async def reconcile(
 
 async def _reconcile_one(
     session: AsyncSession,
-    remote: dict,
+    remote: RemoteSubscription,
     customer_id: str,
     report: ReconcileReport,
     accounts: AccountDirectory,
@@ -204,7 +197,7 @@ async def _reconcile_one(
         # Marked once but the account is there: a mistaken mark, or a user_id
         # corrected since. Cleared, so a later deletion is reported afresh.
         await stripe_client.set_subscription_metadata(
-            remote["id"], {ORPHANED_AT: "", NOTIFIED_AT: ""}
+            remote.id, {ORPHANED_AT: "", NOTIFIED_AT: ""}
         )
 
     if local is None:
@@ -220,15 +213,11 @@ async def _reconcile_one(
         )
         return True
 
-    expected_status = STATUS_MAP.get(remote.get("status", ""))
-    price = stripe_client.subscription_price(remote)
-    expected_tier, _ = resolve_tier(price)
+    expected_tier, _ = resolve_tier(remote.price)
 
-    status_matches = expected_status is not None and local.status == expected_status.value
+    status_matches = local.status == remote.status.value
     tier_should_be = (
-        expected_tier.value
-        if (expected_status in PAID_STATUSES and expected_tier is not None)
-        else "free"
+        expected_tier.value if (remote.grants_access and expected_tier is not None) else "free"
     )
     tier_matches = local.tier == tier_should_be
 
@@ -241,7 +230,7 @@ async def _reconcile_one(
             "user_id": local.user_id,
             "stripe_customer_id": customer_id,
             "local": {"tier": local.tier, "status": local.status},
-            "stripe": {"tier": tier_should_be, "status": remote.get("status")},
+            "stripe": {"tier": tier_should_be, "status": remote.provider_status},
         }
     )
     if dry_run:
@@ -254,17 +243,16 @@ async def _reconcile_one(
     return True
 
 
-async def _user_id_of(remote: dict, customer_id: str) -> str | None:
+async def _user_id_of(remote: RemoteSubscription, customer_id: str) -> str | None:
     """The Supabase user a subscription we have no row for belongs to.
 
     Checkout stamps it on the subscription; a customer created some other way
     carries it only on the customer, which costs a Stripe call.
     """
-    user_id = (remote.get("metadata") or {}).get("user_id")
+    user_id = remote.metadata.get("user_id")
     if user_id:
         return user_id
-    customer = await stripe_client.retrieve_customer(customer_id)
-    return (customer.get("metadata") or {}).get("user_id")
+    return (await stripe_client.retrieve_customer(customer_id)).user_id
 
 
 async def _account_state(
@@ -278,30 +266,35 @@ async def _account_state(
     return user_id in missing
 
 
-def _marks(remote: dict) -> dict:
-    metadata = remote.get("metadata") or {}
-    return {k: metadata[k] for k in (ORPHANED_AT, NOTIFIED_AT) if metadata.get(k)}
+def _marks(remote: RemoteSubscription) -> dict:
+    return {k: remote.metadata[k] for k in (ORPHANED_AT, NOTIFIED_AT) if remote.metadata.get(k)}
 
 
 async def _record_orphan(
-    report: ReconcileReport, remote: dict, customer_id: str, user_id: str, *, dry_run: bool
+    report: ReconcileReport,
+    remote: RemoteSubscription,
+    customer_id: str,
+    user_id: str,
+    *,
+    dry_run: bool,
 ) -> None:
-    status = remote.get("status", "")
-    if status in CLOSED_STATUSES:
+    if remote.ended:
+        # Can no longer take money; anything else can still renew, retry a card
+        # or collect an open invoice.
         report.orphaned_closed += 1
         return
     marks = _marks(remote)
     orphaned_at = marks.get(ORPHANED_AT)
     if orphaned_at is None and not dry_run:
         orphaned_at = datetime.now(UTC).isoformat(timespec="seconds")
-        await stripe_client.set_subscription_metadata(remote["id"], {ORPHANED_AT: orphaned_at})
+        await stripe_client.set_subscription_metadata(remote.id, {ORPHANED_AT: orphaned_at})
     report.orphaned.append(
         {
             "user_id": user_id,
             "stripe_customer_id": customer_id,
-            "stripe_subscription_id": remote.get("id"),
-            "status": status,
-            "cancel_at_period_end": bool(remote.get("cancel_at_period_end")),
+            "stripe_subscription_id": remote.id,
+            "status": remote.provider_status,
+            "cancel_at_period_end": remote.cancel_at_period_end,
             "orphaned_at": orphaned_at,
             "notified_at": marks.get(NOTIFIED_AT),
         }

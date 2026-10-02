@@ -8,7 +8,13 @@ points at, which only appears if you expand two levels deep.
 
 from __future__ import annotations
 
-from app.stripe_client import subscription_discount
+from app.stripe_client import parse_subscription
+
+
+def subscription_discount(raw: dict) -> dict | None:
+    """Through the adapter's one public reader, as the sync sees it."""
+    return parse_subscription({"id": "sub_1", **raw}).discount
+
 
 # What Stripe returns with expand=["data.discounts.source.coupon"].
 EXPANDED = {
