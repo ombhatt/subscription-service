@@ -1,14 +1,63 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.plans import BillingInterval, Tier
+from app.models import SubscriptionStatus
+from app.plans import BillingInterval, Quota, QuotaWindow, Tier
+
+# Every response model here is also the web app's type for it:
+# web/lib/openapi.gen.ts is generated from this app's OpenAPI schema
+# (`make api-types`), and CI fails if the committed copy is stale. A field typed
+# `dict[str, Any]` reaches the frontend as `unknown`, so shapes worth branching
+# on are spelled out.
 
 
-class QuotaState(BaseModel):
+class Response(BaseModel):
+    """Base for what the API sends.
+
+    A field with a default is optional to whoever *sends* it, but a response
+    always carries it. Without this the schema calls those fields optional, and
+    the frontend's types make every reader handle `undefined` that never comes.
+    """
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+
+class Features(Response):
+    """What a tier includes beyond its counted quotas.
+
+    Spelled out rather than `dict[str, Any]` so the pricing page and the
+    paywall get real types. A feature added to a tier in plans.py has to be
+    added here too, which tests/test_api_types.py enforces.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    models: tuple[str, ...]
+    context_tokens: int | None = Field(description="null means unlimited")
+    history_retention_days: int | None = Field(description="null means forever")
+    api_access: bool
+    support_sla: str
+
+
+class QuotaLimit(Response):
+    """A tier's cap on one counter. The usage against it is QuotaState."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    limit: int | None = Field(description="null means unlimited")
+    window: QuotaWindow
+
+    @classmethod
+    def of(cls, quota: Quota) -> QuotaLimit:
+        return cls(key=quota.key, limit=quota.limit, window=quota.window)
+
+
+class QuotaState(Response):
     key: str
     limit: int | None = Field(description="null means unlimited")
     used: int
@@ -16,15 +65,15 @@ class QuotaState(BaseModel):
     reset_at: datetime
 
 
-class EntitlementResponse(BaseModel):
+class EntitlementResponse(Response):
     """The only shape the product should ever branch on."""
 
     user_id: str
     tier: Tier
     display_name: str
-    status: str
-    source: str = Field(description="subscription | grant | default")
-    features: dict[str, Any]
+    status: SubscriptionStatus
+    source: Literal["subscription", "grant", "default"]
+    features: Features
     quotas: list[QuotaState]
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
@@ -41,7 +90,7 @@ class CheckoutRequest(BaseModel):
     promo_code: str | None = None
 
 
-class CheckoutResponse(BaseModel):
+class CheckoutResponse(Response):
     checkout_url: str
     session_id: str
 
@@ -57,11 +106,45 @@ class PortalRequest(BaseModel):
     interval: BillingInterval = BillingInterval.MONTHLY
 
 
-class PortalResponse(BaseModel):
+class PortalResponse(Response):
     portal_url: str
 
 
-class SubscriptionSummary(BaseModel):
+class PlanPrice(Response):
+    price_id: str
+    unit_amount: int | None = Field(
+        description="in the currency's smallest unit; null if Stripe was unreachable"
+    )
+    currency: str | None
+
+
+class PlanResponse(Response):
+    """One card on the pricing page: limits from plans.py, amounts from Stripe."""
+
+    tier: Tier
+    display_name: str
+    purchasable: bool
+    sales_led: bool = Field(description='sold by a conversation: "Custom" and Contact sales')
+    features: Features
+    quotas: list[QuotaLimit]
+    prices: dict[BillingInterval, PlanPrice]
+
+
+class Discount(Response):
+    """A discount mirrored from Stripe; see stripe_client._discount."""
+
+    coupon_id: str | None = None
+    name: str | None = None
+    percent_off: float | None = None
+    amount_off: int | None = None
+    currency: str | None = None
+    duration: str | None = None
+    duration_in_months: int | None = None
+    promotion_code: str | None = None
+    ends_at: int | None = Field(default=None, description="unix seconds; null if it never ends")
+
+
+class SubscriptionSummary(Response):
     user_id: str
     tier: Tier
     status: str
@@ -77,7 +160,7 @@ class SubscriptionSummary(BaseModel):
     disputed_at: datetime | None
     # What they pay, kept off the entitlements payload on purpose: that one is
     # the hot path and answers what a user may *do*, not what they were charged.
-    discount: dict[str, Any] | None = None
+    discount: Discount | None = None
 
 
 class GrantRequest(BaseModel):
@@ -87,7 +170,7 @@ class GrantRequest(BaseModel):
     expires_at: datetime | None = None
 
 
-class GrantResponse(BaseModel):
+class GrantResponse(Response):
     id: str
     user_id: str
     tier: Tier
@@ -97,7 +180,7 @@ class GrantResponse(BaseModel):
     created_at: datetime
 
 
-class AuditEntry(BaseModel):
+class AuditEntry(Response):
     created_at: datetime
     reason: str
     from_tier: str | None
@@ -126,12 +209,12 @@ class ContactSalesRequest(BaseModel):
     source: Literal["pricing_page", "paywall", "billing_page"] = "pricing_page"
 
 
-class ContactSalesResponse(BaseModel):
+class ContactSalesResponse(Response):
     id: str
     status: Literal["received"] = "received"
 
 
-class SalesInquirySummary(BaseModel):
+class SalesInquirySummary(Response):
     id: str
     user_id: str | None
     email: str
@@ -142,3 +225,16 @@ class SalesInquirySummary(BaseModel):
     current_tier: str | None
     handled_at: datetime | None
     created_at: datetime
+
+
+class ChatQuota(Response):
+    key: str
+    limit: int | None
+    used: int
+    remaining: int | None
+
+
+class ChatReply(Response):
+    model: str
+    reply: str
+    quota: ChatQuota

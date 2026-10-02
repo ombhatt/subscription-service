@@ -10,25 +10,57 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.cache import get_cache, get_json, set_json
 from app.config import get_settings
-from app.models import EntitlementGrant, Subscription
+from app.models import EntitlementGrant, Subscription, SubscriptionStatus
 from app.observability import entitlement_cache, entitlement_invalidations
 from app.plans import CATALOG, TIER_RANK, Tier, higher_tier, limits_for
 from app.policy import grace_ends_at, grace_expired
+from app.schemas import Features, QuotaLimit
 from app.timeutil import as_utc
 
 log = logging.getLogger(__name__)
 
+
+class Entitlements(BaseModel):
+    """What one user may do right now: the read path's answer.
+
+    A value, not a dict. It used to be a `dict[str, Any]` read with string keys
+    in five modules, its dates parsed back out of ISO strings by the quota code,
+    and its JSON shape mirrored by hand in the web app. It becomes JSON only at
+    the cache.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    # The effective tier: the higher of subscription and grant, after grace.
+    tier: Tier
+    display_name: str
+    status: SubscriptionStatus
+    source: Literal["subscription", "grant", "default"]
+    features: Features
+    quotas: tuple[QuotaLimit, ...]
+    current_period_start: datetime | None = None
+    current_period_end: datetime | None = None
+    cancel_at_period_end: bool = False
+    grace_ends_at: datetime | None = None
+
+    def quota(self, key: str) -> QuotaLimit | None:
+        """This tier's cap on `key`, or None if the tier does not meter it."""
+        return next((q for q in self.quotas if q.key == key), None)
+
+
 # Bump the version segment whenever the cached shape changes; old entries then
 # expire on their own instead of being read back with missing fields.
-_CACHE_VERSION = "v1"
+_CACHE_VERSION = "v2"
 # How long a fail-open copy stays usable. Long, because it is only ever read
 # when the database is already down.
 _STALE_TTL = 24 * 60 * 60
@@ -144,10 +176,6 @@ def _warn_on_undrained_marks(session: Session) -> None:
         )
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
 async def _active_grant_tier(session: AsyncSession, user_id: str) -> Tier | None:
     now = datetime.now(UTC)
     result = await session.execute(
@@ -166,19 +194,19 @@ async def _active_grant_tier(session: AsyncSession, user_id: str) -> Tier | None
     return max(tiers, key=lambda t: TIER_RANK[t])
 
 
-async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any]:
+async def _resolve_from_db(session: AsyncSession, user_id: str) -> Entitlements:
     result = await session.execute(select(Subscription).where(Subscription.user_id == user_id))
     sub = result.scalar_one_or_none()
 
     subscription_tier = Tier.FREE
-    status = "free"
+    status = SubscriptionStatus.FREE
     period_start = None
     period_end = None
     cancel_at_period_end = False
     grace_until = None
 
     if sub is not None:
-        status = sub.status
+        status = SubscriptionStatus(sub.status)
         period_start = sub.current_period_start
         period_end = sub.current_period_end
         cancel_at_period_end = sub.cancel_at_period_end
@@ -203,25 +231,22 @@ async def _resolve_from_db(session: AsyncSession, user_id: str) -> dict[str, Any
         source = "default"
 
     definition = limits_for(effective)
-    return {
-        "user_id": user_id,
-        "tier": effective.value,
-        "display_name": definition.display_name,
-        "status": status,
-        "source": source,
-        "features": dict(definition.features),
-        "quotas": [
-            {"key": q.key, "limit": q.limit, "window": q.window.value}
-            for q in definition.quotas.values()
-        ],
-        "current_period_start": _iso(as_utc(period_start)),
-        "current_period_end": _iso(as_utc(period_end)),
-        "cancel_at_period_end": cancel_at_period_end,
-        "grace_ends_at": _iso(grace_until),
-    }
+    return Entitlements(
+        user_id=user_id,
+        tier=effective,
+        display_name=definition.display_name,
+        status=status,
+        source=source,
+        features=Features(**definition.features),
+        quotas=tuple(QuotaLimit.of(q) for q in definition.quotas.values()),
+        current_period_start=as_utc(period_start),
+        current_period_end=as_utc(period_end),
+        cancel_at_period_end=cancel_at_period_end,
+        grace_ends_at=grace_until,
+    )
 
 
-def _ttl_for(data: dict[str, Any]) -> int:
+def _ttl_for(entitlements: Entitlements) -> int:
     """How long this answer stays true.
 
     Normally the configured TTL. But a subscriber inside a dunning grace window
@@ -240,11 +265,11 @@ def _ttl_for(data: dict[str, Any]) -> int:
     at most one second per subscriber per dunning cycle.
     """
     ttl = get_settings().entitlement_cache_ttl
-    grace_until = data.get("grace_ends_at")
+    grace_until = entitlements.grace_ends_at
     if not grace_until:
         return ttl
 
-    remaining = (as_utc(datetime.fromisoformat(grace_until)) - datetime.now(UTC)).total_seconds()
+    remaining = (as_utc(grace_until) - datetime.now(UTC)).total_seconds()
     if remaining <= 0:
         return ttl  # already past it; the answer is stable again
     if remaining < 1:
@@ -256,11 +281,11 @@ def _ttl_for(data: dict[str, Any]) -> int:
     return min(ttl, int(remaining))
 
 
-async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str, Any]:
+async def resolve_entitlements(session: AsyncSession, user_id: str) -> Entitlements:
     cached = await get_json(_key(user_id))
     if cached is not None:
         entitlement_cache.labels(result="hit").inc()
-        return cached
+        return Entitlements.model_validate(cached)
 
     try:
         data = await _resolve_from_db(session, user_id)
@@ -271,36 +296,20 @@ async def resolve_entitlements(session: AsyncSession, user_id: str) -> dict[str,
             # trouble, and a rising rate here is an outage in progress.
             entitlement_cache.labels(result="stale").inc()
             log.exception("entitlement lookup failed for %s; serving stale copy", user_id)
-            return stale
+            return Entitlements.model_validate(stale)
         raise
 
     entitlement_cache.labels(result="miss").inc()
 
     ttl = _ttl_for(data)
+    payload = data.model_dump(mode="json")
     if ttl > 0:
-        await set_json(_key(user_id), data, ttl)
+        await set_json(_key(user_id), payload, ttl)
     # The stale copy is written regardless: it exists to survive a database
     # outage, not to answer normally, and the read path only reaches for it
     # when _resolve_from_db has already failed.
-    await set_json(_stale_key(user_id), data, _STALE_TTL)
+    await set_json(_stale_key(user_id), payload, _STALE_TTL)
     return data
-
-
-def tier_of(entitlements: dict[str, Any]) -> Tier:
-    return Tier(entitlements["tier"])
-
-
-def feature(entitlements: dict[str, Any], name: str, default: Any = None) -> Any:
-    return entitlements.get("features", {}).get(name, default)
-
-
-def quota_limit(entitlements: dict[str, Any], key: str) -> tuple[int | None, str] | None:
-    """(limit, window) for a quota key on this entitlement set, or None if the
-    tier does not meter it at all."""
-    for q in entitlements.get("quotas", []):
-        if q["key"] == key:
-            return q["limit"], q["window"]
-    return None
 
 
 def minimum_tier_for_feature(name: str, value: Any) -> Tier | None:

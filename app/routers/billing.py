@@ -29,8 +29,12 @@ from app.schemas import (
     CheckoutResponse,
     ContactSalesRequest,
     ContactSalesResponse,
+    Features,
+    PlanPrice,
+    PlanResponse,
     PortalRequest,
     PortalResponse,
+    QuotaLimit,
     SubscriptionSummary,
 )
 from app.services.entitlements import commit_and_invalidate, resolve_entitlements
@@ -52,7 +56,7 @@ _PLANS_CACHE_KEY = "plans:v2"
 _PLANS_CACHE_TTL = 300
 
 
-@router.get("/plans")
+@router.get("/plans", response_model=list[PlanResponse])
 async def plans() -> list[dict]:
     """The catalog, for the pricing page.
 
@@ -75,22 +79,18 @@ async def plans() -> list[dict]:
             price_id = price_id_for(tier, interval)
             if not price_id:
                 continue
-            prices[interval.value] = {"price_id": price_id, **await _price_amount(price_id)}
+            prices[interval] = PlanPrice(price_id=price_id, **await _price_amount(price_id))
 
-        out.append(
-            {
-                "tier": tier.value,
-                "display_name": definition.display_name,
-                "purchasable": definition.purchasable,
-                "sales_led": definition.sales_led,
-                "features": definition.features,
-                "quotas": [
-                    {"key": q.key, "limit": q.limit, "window": q.window.value}
-                    for q in definition.quotas.values()
-                ],
-                "prices": prices,
-            }
+        plan = PlanResponse(
+            tier=tier,
+            display_name=definition.display_name,
+            purchasable=definition.purchasable,
+            sales_led=definition.sales_led,
+            features=Features(**definition.features),
+            quotas=[QuotaLimit.of(q) for q in definition.quotas.values()],
+            prices=prices,
         )
+        out.append(plan.model_dump(mode="json"))
 
     await set_json(_PLANS_CACHE_KEY, out, _PLANS_CACHE_TTL)
     return out
@@ -275,7 +275,7 @@ async def contact_sales(
     # different conversation from a visitor browsing the pricing page.
     current_tier = None
     if user is not None:
-        current_tier = (await resolve_entitlements(session, user.id))["tier"]
+        current_tier = (await resolve_entitlements(session, user.id)).tier.value
 
     inquiry = SalesInquiry(
         user_id=user.id if user else None,

@@ -346,6 +346,15 @@ A Next.js + TypeScript frontend lives in [`web/`](web) and is what
 `next.config.mjs` rewrites `/api/*` to the FastAPI service, so the browser makes
 same-origin requests and there is no CORS to configure.
 
+The API's types are **generated**, not written by hand. `web/lib/openapi.json`
+is exported from the app, `web/lib/openapi.gen.ts` is generated from that by
+openapi-typescript, and `web/lib/types.ts` gives the shapes their names. After
+changing a response model in `app/schemas.py`, run `make api-types` and commit
+both files; CI fails if either is stale, and the compiler then points at every
+page the change affects. Error bodies (the 403 and 429 paywalls) come from
+exception handlers rather than response models, so those few stay written out
+in `types.ts`.
+
 `useRequireSession` redirects signed-out visitors away from `/billing` and
 `/chat`. That is a rendering decision, not a security boundary — the API
 verifies every token itself. It is deliberately client-side: Next middleware
@@ -362,6 +371,8 @@ app/
   models.py            6 tables (below)
   db.py                engine settings, including the pooler routes
   stripe_client.py     the only module that imports `stripe`
+  billing_provider.py  what the service needs from Stripe, as typed values
+  schemas.py           response models, and the web app's types (see below)
   cache.py             Redis or in-process: entitlement cache, atomic counters
   accounts.py          does a Supabase account still exist? (reconcile only)
   notify.py            operator alert email over SMTP
@@ -395,6 +406,7 @@ scripts/
   ci_db_role.sql           the role CI connects as, and what it may touch
   cleanup_ci_schemas.py    drops schemas an interrupted CI run left behind
   cleanup_test_clocks.py   removes clocks an interrupted run left behind
+  export_openapi.py        the API schema the web app's types are generated from
 ```
 
 ### Schema

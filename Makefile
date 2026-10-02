@@ -4,7 +4,7 @@
 PYTHON ?= python3.11
 
 .PHONY: up down services services-down install lock migrate seed portal run test testclock lint \
-        coverage coverage-html audit image image-web stack stack-down
+        coverage coverage-html audit image image-web stack stack-down api-types
 
 up:            ## start postgres + redis in docker
 	docker compose up -d
@@ -55,6 +55,10 @@ coverage-html: ## same, but browsable -- htmlcov/index.html
 	.venv/bin/coverage run -m pytest -q
 	.venv/bin/coverage html
 	@echo "open htmlcov/index.html"
+
+api-types:     ## regenerate the web app's API types after changing a response model
+	.venv/bin/python -m scripts.export_openapi
+	cd web && npm run gen:api
 
 lint:
 	.venv/bin/ruff check app alembic tests scripts integration

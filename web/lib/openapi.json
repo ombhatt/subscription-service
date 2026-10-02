@@ -1,0 +1,2308 @@
+{
+  "components": {
+    "schemas": {
+      "BillingInterval": {
+        "enum": [
+          "monthly",
+          "annual"
+        ],
+        "title": "BillingInterval",
+        "type": "string"
+      },
+      "ChatQuota": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "limit",
+          "used",
+          "remaining"
+        ],
+        "title": "ChatQuota",
+        "type": "object"
+      },
+      "ChatReply": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/ChatQuota"
+          },
+          "reply": {
+            "title": "Reply",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "reply",
+          "quota"
+        ],
+        "title": "ChatReply",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model": {
+            "default": "small",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "CheckoutRequest": {
+        "properties": {
+          "cancel_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Url"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/BillingInterval",
+            "default": "monthly"
+          },
+          "promo_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promo Code"
+          },
+          "success_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Url"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          }
+        },
+        "required": [
+          "tier"
+        ],
+        "title": "CheckoutRequest",
+        "type": "object"
+      },
+      "CheckoutResponse": {
+        "properties": {
+          "checkout_url": {
+            "title": "Checkout Url",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checkout_url",
+          "session_id"
+        ],
+        "title": "CheckoutResponse",
+        "type": "object"
+      },
+      "ContactSalesRequest": {
+        "description": "An Enterprise inquiry.\n\nEvery field is length-bounded. This endpoint is public by necessity -- the\npricing page is -- so the request body is attacker-controlled, and an\nunbounded string here is a way to fill a database for free.",
+        "properties": {
+          "company": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            "title": "Email",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "seats": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seats"
+          },
+          "source": {
+            "default": "pricing_page",
+            "enum": [
+              "pricing_page",
+              "paywall",
+              "billing_page"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "ContactSalesRequest",
+        "type": "object"
+      },
+      "ContactSalesResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "received",
+            "default": "received",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ContactSalesResponse",
+        "type": "object"
+      },
+      "Discount": {
+        "description": "A discount mirrored from Stripe; see stripe_client._discount.",
+        "properties": {
+          "amount_off": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Off"
+          },
+          "coupon_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coupon Id"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "duration_in_months": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration In Months"
+          },
+          "ends_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "unix seconds; null if it never ends",
+            "title": "Ends At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "percent_off": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Off"
+          },
+          "promotion_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promotion Code"
+          }
+        },
+        "required": [
+          "coupon_id",
+          "name",
+          "percent_off",
+          "amount_off",
+          "currency",
+          "duration",
+          "duration_in_months",
+          "promotion_code",
+          "ends_at"
+        ],
+        "title": "Discount",
+        "type": "object"
+      },
+      "EntitlementResponse": {
+        "description": "The only shape the product should ever branch on.",
+        "properties": {
+          "cancel_at_period_end": {
+            "default": false,
+            "title": "Cancel At Period End",
+            "type": "boolean"
+          },
+          "current_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Period End"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          },
+          "grace_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "set while past_due; access ends here",
+            "title": "Grace Ends At"
+          },
+          "quotas": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaState"
+            },
+            "title": "Quotas",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "subscription",
+              "grant",
+              "default"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SubscriptionStatus"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "tier",
+          "display_name",
+          "status",
+          "source",
+          "features",
+          "quotas",
+          "current_period_end",
+          "cancel_at_period_end",
+          "grace_ends_at"
+        ],
+        "title": "EntitlementResponse",
+        "type": "object"
+      },
+      "Features": {
+        "additionalProperties": false,
+        "description": "What a tier includes beyond its counted quotas.\n\nSpelled out rather than `dict[str, Any]` so the pricing page and the\npaywall get real types. A feature added to a tier in plans.py has to be\nadded here too, which tests/test_api_types.py enforces.",
+        "properties": {
+          "api_access": {
+            "title": "Api Access",
+            "type": "boolean"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null means unlimited",
+            "title": "Context Tokens"
+          },
+          "history_retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null means forever",
+            "title": "History Retention Days"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "support_sla": {
+            "title": "Support Sla",
+            "type": "string"
+          }
+        },
+        "required": [
+          "models",
+          "context_tokens",
+          "history_retention_days",
+          "api_access",
+          "support_sla"
+        ],
+        "title": "Features",
+        "type": "object"
+      },
+      "GrantRequest": {
+        "properties": {
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "tier",
+          "reason"
+        ],
+        "title": "GrantRequest",
+        "type": "object"
+      },
+      "GrantResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "tier",
+          "reason",
+          "expires_at",
+          "created_by",
+          "created_at"
+        ],
+        "title": "GrantResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PlanPrice": {
+        "properties": {
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "price_id": {
+            "title": "Price Id",
+            "type": "string"
+          },
+          "unit_amount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "in the currency's smallest unit; null if Stripe was unreachable",
+            "title": "Unit Amount"
+          }
+        },
+        "required": [
+          "price_id",
+          "unit_amount",
+          "currency"
+        ],
+        "title": "PlanPrice",
+        "type": "object"
+      },
+      "PlanResponse": {
+        "description": "One card on the pricing page: limits from plans.py, amounts from Stripe.",
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
+          },
+          "prices": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlanPrice"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/BillingInterval"
+            },
+            "title": "Prices",
+            "type": "object"
+          },
+          "purchasable": {
+            "title": "Purchasable",
+            "type": "boolean"
+          },
+          "quotas": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaLimit"
+            },
+            "title": "Quotas",
+            "type": "array"
+          },
+          "sales_led": {
+            "description": "sold by a conversation: \"Custom\" and Contact sales",
+            "title": "Sales Led",
+            "type": "boolean"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          }
+        },
+        "required": [
+          "tier",
+          "display_name",
+          "purchasable",
+          "sales_led",
+          "features",
+          "quotas",
+          "prices"
+        ],
+        "title": "PlanResponse",
+        "type": "object"
+      },
+      "PortalRequest": {
+        "description": "Optional: which plan the customer asked for.\n\nThe portal opens on its home page without this, which is fine for \"Manage\nbilling\" and wrong for a button that named a tier.",
+        "properties": {
+          "interval": {
+            "$ref": "#/components/schemas/BillingInterval",
+            "default": "monthly"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PortalRequest",
+        "type": "object"
+      },
+      "PortalResponse": {
+        "properties": {
+          "portal_url": {
+            "title": "Portal Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "portal_url"
+        ],
+        "title": "PortalResponse",
+        "type": "object"
+      },
+      "QuotaLimit": {
+        "description": "A tier's cap on one counter. The usage against it is QuotaState.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null means unlimited",
+            "title": "Limit"
+          },
+          "window": {
+            "$ref": "#/components/schemas/QuotaWindow"
+          }
+        },
+        "required": [
+          "key",
+          "limit",
+          "window"
+        ],
+        "title": "QuotaLimit",
+        "type": "object"
+      },
+      "QuotaState": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null means unlimited",
+            "title": "Limit"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining"
+          },
+          "reset_at": {
+            "format": "date-time",
+            "title": "Reset At",
+            "type": "string"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "limit",
+          "used",
+          "remaining",
+          "reset_at"
+        ],
+        "title": "QuotaState",
+        "type": "object"
+      },
+      "QuotaWindow": {
+        "description": "How a counter's window is chosen.\n\nDAILY resets at UTC midnight. BILLING_PERIOD resets on the subscriber's own\nrenewal date -- which is a different day for almost every customer, and the\nreason these two are not interchangeable.",
+        "enum": [
+          "daily",
+          "billing_period"
+        ],
+        "title": "QuotaWindow",
+        "type": "string"
+      },
+      "SalesInquirySummary": {
+        "properties": {
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Tier"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "handled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handled At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "seats": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seats"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "email",
+          "company",
+          "seats",
+          "message",
+          "source",
+          "current_tier",
+          "handled_at",
+          "created_at"
+        ],
+        "title": "SalesInquirySummary",
+        "type": "object"
+      },
+      "SubscriptionStatus": {
+        "description": "Internal status. Deliberately *not* Stripe's vocabulary.\n\nOnly TRIALING, ACTIVE and PAST_DUE grant paid entitlements -- PAST_DUE keeps\naccess until the grace window closes, because most failed renewals are\nexpired cards and cutting a willing payer off converts them to churn.",
+        "enum": [
+          "free",
+          "trialing",
+          "active",
+          "past_due",
+          "incomplete",
+          "paused"
+        ],
+        "title": "SubscriptionStatus",
+        "type": "string"
+      },
+      "SubscriptionSummary": {
+        "properties": {
+          "billing_interval": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Interval"
+          },
+          "cancel_at_period_end": {
+            "title": "Cancel At Period End",
+            "type": "boolean"
+          },
+          "current_period_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Period End"
+          },
+          "current_period_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Period Start"
+          },
+          "discount": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Discount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disputed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disputed At"
+          },
+          "past_due_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Past Due Since"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stripe_customer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Customer Id"
+          },
+          "stripe_price_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Price Id"
+          },
+          "stripe_subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stripe Subscription Id"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "trial_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial End"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "tier",
+          "status",
+          "stripe_customer_id",
+          "stripe_subscription_id",
+          "stripe_price_id",
+          "billing_interval",
+          "current_period_start",
+          "current_period_end",
+          "cancel_at_period_end",
+          "trial_end",
+          "past_due_since",
+          "disputed_at",
+          "discount"
+        ],
+        "title": "SubscriptionSummary",
+        "type": "object"
+      },
+      "Tier": {
+        "enum": [
+          "free",
+          "plus",
+          "pro",
+          "enterprise"
+        ],
+        "title": "Tier",
+        "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Flat-price Free/Plus/Pro subscriptions on Stripe Billing.",
+    "title": "Subscription service",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "description": "Liveness. Deliberately checks nothing.\n\n\"Is this process able to serve a request\" -- and nothing else. A liveness\nprobe that touches the database restarts every instance when the database\nblinks, which is how a recoverable outage becomes a crash loop. Use\n/readyz to decide whether to send traffic here.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Prometheus exposition.\n\nBehind the admin key rather than open: it is a precise description of your\ntraffic and failure rates. Most scrapers can send a header.\n\nPer-process and in memory, so under several workers a scrape sees one of\nthem. `prometheus_client`'s multiprocess mode is the answer when that\nmatters; until then, one worker keeps these honest.",
+        "operationId": "metrics_metrics_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Metrics",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Readiness. Checks the dependencies, and says which one is unhappy.\n\n503 when Postgres is unreachable; 200 with status \"degraded\" when only\nRedis is, because the read path survives that and a shared cache failure\nmust not empty the load balancer. See app/health.py.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readyz Readyz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/v1/admin/grants": {
+      "post": {
+        "description": "Comp a user to a tier without inventing a fake subscription.\n\nResolution takes the higher of grant and subscription, so this lifts a free\nuser up and never silently downgrades a paying one.",
+        "operationId": "create_grant_v1_admin_grants_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Admin-Actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Admin-Actor",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Grant",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/grants/{grant_id}": {
+      "delete": {
+        "operationId": "revoke_grant_v1_admin_grants__grant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke Grant V1 Admin Grants  Grant Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Grant",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/sales-inquiries": {
+      "get": {
+        "description": "The Enterprise lead queue, newest first.\n\nBehind the admin key with everything else here: these are names, email\naddresses and stated seat counts of people evaluating the product, which is\ncommercially sensitive and personal data besides.\n\n`handled=false` is the working view -- what nobody has replied to yet.",
+        "operationId": "sales_inquiries_list_v1_admin_sales_inquiries_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "handled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Handled"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SalesInquirySummary"
+                  },
+                  "title": "Response Sales Inquiries List V1 Admin Sales Inquiries Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Inquiries List",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/sales-inquiries/{inquiry_id}/handled": {
+      "post": {
+        "description": "Mark a lead as followed up, so the queue means something.",
+        "operationId": "mark_inquiry_handled_v1_admin_sales_inquiries__inquiry_id__handled_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "inquiry_id",
+            "required": true,
+            "schema": {
+              "title": "Inquiry Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesInquirySummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Inquiry Handled",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/users/{user_id}": {
+      "get": {
+        "description": "Everything support needs on one screen: what they are entitled to, what\nStripe objects sit behind it, and every transition that got them here.",
+        "operationId": "inspect_user_v1_admin_users__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect User V1 Admin Users  User Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect User",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/users/{user_id}/extend-grace": {
+      "post": {
+        "description": "Push a past_due customer's cut-off back while they sort out a card.",
+        "operationId": "extend_grace_v1_admin_users__user_id__extend_grace_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Extend Grace V1 Admin Users  User Id  Extend Grace Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Extend Grace",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/users/{user_id}/resync": {
+      "post": {
+        "description": "Force a re-read from Stripe. The fix for a webhook we missed.",
+        "operationId": "resync_v1_admin_users__user_id__resync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resync V1 Admin Users  User Id  Resync Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resync",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/billing/cancel": {
+      "post": {
+        "description": "Cancel at the end of the paid period.\n\nIn the app rather than only in Stripe's portal: cancelling is the one thing\na customer should never have to hunt for, and a support ticket asking how\nto leave costs more than the button.\n\nImmediate cancellation is deliberately not offered here. They paid through\nthe period, so ending it early is a refund conversation -- which is what the\nportal and Stripe's dashboard are for.",
+        "operationId": "cancel_v1_billing_cancel_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/checkout": {
+      "post": {
+        "description": "Start a hosted checkout. Grants nothing -- the webhook does that.",
+        "operationId": "checkout_v1_billing_checkout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Checkout",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/contact-sales": {
+      "post": {
+        "description": "Record an Enterprise inquiry.\n\nDeliberately public. The pricing page is unauthenticated, and the leads\nworth having are often from people evaluating before they sign up --\nrequiring a login here would filter out exactly those.\n\nThat makes this the only unauthenticated write in the service, so it is\nrate limited per caller (app/ratelimit.py) as well as length-bounded by\nContactSalesRequest. The limiter runs as a dependency, before the body is\nvalidated, so malformed attempts are counted too. It fails open, so\n`rate_limit_errors_total` is the metric that says it has stopped limiting;\n`sales_inquiries_total` remains the signal for a flood that gets through.\n\nNothing is emailed from here. Recording it durably is the job; who gets\nnotified is a workflow decision, and a background send would be one more\nthing to fail inside a request the customer is waiting on.",
+        "operationId": "contact_sales_v1_billing_contact_sales_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactSalesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactSalesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Contact Sales",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/health": {
+      "get": {
+        "description": "Cheap config check: are the prices this service needs actually set?",
+        "operationId": "billing_health_v1_billing_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Billing Health V1 Billing Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Billing Health",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/plans": {
+      "get": {
+        "description": "The catalog, for the pricing page.\n\nLimits come from plans.py; amounts come from Stripe, which owns what a price\ncosts. Neither is duplicated in the frontend -- a pricing page that\nhard-codes \"$20/mo\" is a pricing page that will eventually lie.\n\nCached, because this is public and unauthenticated, and because it should\nnot put a Stripe API call in front of every visitor.",
+        "operationId": "plans_v1_billing_plans_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanResponse"
+                  },
+                  "title": "Response Plans V1 Billing Plans Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Plans",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/portal": {
+      "post": {
+        "description": "Change plan, cancel, update card, download invoices.\n\nAll of it is Stripe's hosted portal, which is why this service has no\nbilling UI of its own and no proration code.\n\nWith a `tier`, the session is deep-linked to a confirmation for that plan:\na button that says \"Upgrade to Pro\" should land on Pro, not on a list the\ncustomer has to search. Which plans the portal will switch between is its\n*configuration* -- see scripts/configure_portal.py, without which it offers\nonly the plan they already have.",
+        "operationId": "portal_v1_billing_portal_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PortalRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Portal",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/resume": {
+      "post": {
+        "description": "Undo a pending cancellation.\n\nPaired with /cancel deliberately. An app that makes leaving easy and coming\nback hard has only moved the friction somewhere less honest, and \"reactivate\nin the portal\" is not a call to action anyone can follow.",
+        "operationId": "resume_v1_billing_resume_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/subscription": {
+      "get": {
+        "operationId": "my_subscription_v1_billing_subscription_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Subscription",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/chat": {
+      "post": {
+        "operationId": "chat_v1_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatReply"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat",
+        "tags": [
+          "product"
+        ]
+      }
+    },
+    "/v1/entitlements": {
+      "get": {
+        "description": "What this user may do right now.\n\nThe one call the product makes. Clients should branch on quotas and features\nhere, never on the tier name -- that way changing a limit is a config edit,\nnot a frontend release.",
+        "operationId": "my_entitlements_v1_entitlements_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntitlementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Entitlements",
+        "tags": [
+          "entitlements"
+        ]
+      }
+    },
+    "/v1/webhooks/recent": {
+      "get": {
+        "description": "Webhook health at a glance: what arrived, what failed, how far behind.\n\nGuarded explicitly, because this router is otherwise unauthenticated by\nnecessity -- Stripe cannot send an admin key, so `/stripe` is protected by\nsignature verification instead. Anything else added here needs its own\ndependency, and this one shipped without it: the rows include `error`, which\nholds a truncated traceback, so it was serving stack traces to the internet.",
+        "operationId": "recent_events_v1_webhooks_recent_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Recent Events V1 Webhooks Recent Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recent Events",
+        "tags": [
+          "webhooks",
+          "ops"
+        ]
+      }
+    },
+    "/v1/webhooks/stripe": {
+      "post": {
+        "operationId": "stripe_webhook_v1_webhooks_stripe_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "stripe-signature",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stripe-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stripe Webhook V1 Webhooks Stripe Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stripe Webhook",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    }
+  }
+}
