@@ -1,104 +1,103 @@
 """The row lock that serialises concurrent syncs for one customer.
 
 The unit suite runs on SQLite, which silently omits `FOR UPDATE` -- that is why
-the rest of the tests still work, and also why they cannot prove the lock is
-there. So this checks the statement we build, and `integration/` proves the
-behaviour against real Postgres.
+the rest of the tests still work, and also why they cannot see the lock in what
+SQLite runs. So these capture the statements the sync path hands to
+`session.execute` and compile them for Postgres, which is where the lock exists.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.dialects import postgresql, sqlite
+from types import SimpleNamespace
 
+from sqlalchemy.dialects import postgresql
+
+from app.config import get_settings
 from app.models import Subscription
+from app.services import subscriptions
 from app.services.entitlements import commit_and_invalidate
 
 
-def _statement(lock: bool):
-    stmt = select(Subscription).where(Subscription.stripe_customer_id == "cus_1")
-    return stmt.with_for_update() if lock else stmt
+def _as_postgres(statement) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))
 
 
-def test_the_locked_lookup_asks_postgres_for_a_row_lock():
-    sql = str(_statement(lock=True).compile(dialect=postgresql.dialect()))
-    assert "FOR UPDATE" in sql
-
-
-def test_the_unlocked_lookup_does_not():
-    sql = str(_statement(lock=False).compile(dialect=postgresql.dialect()))
-    assert "FOR UPDATE" not in sql
-
-
-def test_sqlite_drops_the_clause_rather_than_failing():
-    """If SQLite raised on FOR UPDATE, every test using the sync path would
-    break the moment the lock was added."""
-    sql = str(_statement(lock=True).compile(dialect=sqlite.dialect()))
-    assert "FOR UPDATE" not in sql
-    assert "SELECT" in sql
-
-
-async def test_sync_takes_the_lock(session, stripe, monkeypatch):
-    """The lock has to be requested before Stripe is asked anything.
-
-    Locking afterwards would let two workers fetch the same stale answer and
-    merely serialise the writes, which fixes nothing.
-    """
-    from app.services import subscriptions
-
+async def test_sync_locks_the_row_before_asking_stripe(session, stripe, monkeypatch):
+    """Locking after the Stripe call would let two workers fetch the same stale
+    answer and merely serialise the writes, which fixes nothing."""
     order: list[str] = []
-    original_find = subscriptions._find_by_customer
+    original_execute = session.execute
 
-    async def watched_find(session_, customer_id, *, lock=False):
-        order.append(f"select(lock={lock})")
-        return await original_find(session_, customer_id, lock=lock)
+    async def recording_execute(statement, *args, **kwargs):
+        order.append(_as_postgres(statement))
+        return await original_execute(statement, *args, **kwargs)
 
-    async def watched_fetch(customer_id):
+    async def recording_fetch(customer_id):
         order.append("stripe.fetch")
         return await stripe.fetch_current_subscription(customer_id)
-
-    monkeypatch.setattr(subscriptions, "_find_by_customer", watched_find)
-    monkeypatch.setattr(subscriptions.stripe_client, "fetch_current_subscription", watched_fetch)
 
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_lock"))
     await session.commit()
     stripe.set_subscription("cus_lock", status="active", price_id="price_pro_m")
+    monkeypatch.setattr(session, "execute", recording_execute)
+    monkeypatch.setattr(subscriptions.stripe_client, "fetch_current_subscription", recording_fetch)
 
-    await subscriptions.sync_subscription_from_stripe(session, stripe_customer_id="cus_lock")
+    sub = await subscriptions.sync_subscription_from_stripe(session, stripe_customer_id="cus_lock")
     await commit_and_invalidate(session)
 
-    assert order[0] == "select(lock=True)", f"lock must come first, got {order}"
-    assert "stripe.fetch" in order
-    assert order.index("select(lock=True)") < order.index("stripe.fetch")
+    lookup = order[0]
+    assert "FROM subscriptions" in lookup and "stripe_customer_id" in lookup, order
+    assert lookup.rstrip().endswith("FOR UPDATE"), lookup
+    assert order.index("stripe.fetch") > 0
+    assert (sub.tier, sub.status) == ("pro", "active")
 
 
-async def test_the_lock_wait_is_bounded_on_postgres(session, monkeypatch):
+async def test_the_unlocked_lookup_takes_no_row_lock(session, monkeypatch):
+    executed: list[str] = []
+    original_execute = session.execute
+
+    async def recording_execute(statement, *args, **kwargs):
+        executed.append(_as_postgres(statement))
+        return await original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", recording_execute)
+
+    assert await subscriptions._find_by_customer(session, "cus_none") is None
+    assert len(executed) == 1
+    assert "FOR UPDATE" not in executed[0]
+
+
+class _PostgresSession:
+    """Records what reaches `execute` while reporting a Postgres bind, which is
+    the only way to reach the lock-timeout branch on a SQLite suite."""
+
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, dict | None]] = []
+
+    def get_bind(self):
+        return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+    async def execute(self, statement, params=None):
+        self.executed.append((_as_postgres(statement), params))
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+
+async def test_the_lock_wait_is_bounded_on_postgres(monkeypatch):
     """A waiter must give up rather than block for as long as Stripe takes.
 
     The holder of this lock is inside a network call, so an unbounded wait means
     every queued event for that customer holds a connection until Stripe answers.
+    Postgres reads `lock_timeout` as milliseconds.
     """
-    from sqlalchemy import text
+    monkeypatch.setattr(get_settings(), "db_lock_timeout_seconds", 2.5)
+    session = _PostgresSession()
 
-    from app.services import subscriptions
+    await subscriptions._find_by_customer(session, "cus_1", lock=True)
 
-    issued: list[str] = []
-    original = session.execute
-
-    async def spy(statement, *args, **kwargs):
-        issued.append(str(statement))
-        return await original(statement, *args, **kwargs)
-
-    monkeypatch.setattr(session, "execute", spy)
-
-    # SQLite has no row locks, so the guard should skip silently rather than
-    # emitting Postgres-only SQL that would raise.
-    await subscriptions._bound_lock_wait(session)
-    assert not any("set_config" in s for s in issued), (
-        "lock_timeout must not be set on a dialect without row locks"
-    )
-    # And the session is still usable, which is the thing that would break.
-    assert (await session.execute(text("select 1"))).scalar() == 1
+    (bound_sql, bound_params), (lookup_sql, _) = session.executed
+    assert "set_config('lock_timeout', %(value)s, true)" in bound_sql
+    assert bound_params == {"value": "2500"}
+    assert lookup_sql.rstrip().endswith("FOR UPDATE")
 
 
 def test_lock_and_stripe_timeouts_are_actually_bounded():
