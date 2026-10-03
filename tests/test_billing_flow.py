@@ -81,17 +81,23 @@ async def test_full_upgrade_flow(client, stripe):
 
 
 async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):
+    """The local row alone refuses. Stripe has already ended the subscription
+    here and that webhook has not landed, so asking Stripe would allow the
+    checkout: only the row can say no."""
     await client.post(
         "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
     await webhook(client, "evt_s1", "customer.subscription.created", customer)
+    stripe.set_subscription(customer, status="canceled", price_id="price_pro_m")
 
     again = await client.post(
         "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
     )
+
     assert again.status_code == 409, "plan changes belong in the portal, not a second subscription"
+    assert len(stripe.checkout_sessions) == 1, "no second checkout session was created"
 
 
 @pytest.mark.parametrize("stripe_status", ["active", "trialing", "past_due", "unpaid"])
