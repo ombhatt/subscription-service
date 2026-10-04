@@ -90,7 +90,13 @@ async def peek(user_id: str, key: str, entitlements: Entitlements) -> dict[str, 
         return None
     limit = found.limit
     start, end = window_for(found.window, entitlements)
-    used = await get_cache().get_int(_counter_key(user_id, key, start))
+    try:
+        used = await get_cache().get_int(_counter_key(user_id, key, start))
+    except Exception:
+        # Display only: enforcement is `consume`. An unreachable cache must not
+        # take the entitlement payload down with it.
+        log.exception("quota read failed for %s/%s; reporting 0 used", user_id, key)
+        used = 0
     return {
         "key": key,
         "limit": limit,
