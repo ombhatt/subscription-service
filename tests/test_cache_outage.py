@@ -44,3 +44,35 @@ async def test_feature_check_still_resolves_when_redis_is_down(client, session):
 
     ents = await resolve_entitlements(session, "payer2")
     assert ents.tier == "pro"
+
+
+async def test_metered_requests_are_allowed_and_counted_elsewhere_when_redis_is_down(
+    client, session
+):
+    """Quota enforcement fails open, like the contact-sales rate limiter.
+
+    A paying customer refused by our outage is worse than anyone getting a few
+    uncounted requests: the README's read/write asymmetry. What must not happen
+    is that it is silent -- the metric says enforcement is off, and the durable
+    mirror still records the usage that Redis could not.
+    """
+    from sqlalchemy import select
+
+    from app.models import UsageCounter
+    from app.observability import quota_errors
+
+    session.add(Subscription(user_id="payer3", tier="pro", status="active"))
+    await session.commit()
+    set_cache(DeadCache())
+    before = quota_errors.labels(quota="messages_per_day")._value.get()
+
+    response = await client.post(
+        "/v1/chat", json={"model": "reasoning", "message": "hi"}, headers={"X-User-Id": "payer3"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert quota_errors.labels(quota="messages_per_day")._value.get() == before + 1
+    mirrored = (
+        await session.scalars(select(UsageCounter.count).where(UsageCounter.user_id == "payer3"))
+    ).all()
+    assert mirrored == [1], "the usage Redis could not count is still recorded"
