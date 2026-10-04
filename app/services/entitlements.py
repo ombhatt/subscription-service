@@ -281,8 +281,31 @@ def _ttl_for(entitlements: Entitlements) -> int:
     return min(ttl, int(remaining))
 
 
+async def _cache_get(key: str) -> Any | None:
+    """A cache read that treats an unreachable cache as a miss.
+
+    Redis is in front of the database, not instead of it: `/readyz` reports a
+    dead cache as "degraded" and keeps the instance in rotation on the promise
+    that this path falls through to Postgres. Raising here would turn that
+    promise into a 500 for every customer, paying ones included.
+    """
+    try:
+        return await get_json(key)
+    except Exception:
+        log.exception("entitlement cache read failed; treating as a miss")
+        return None
+
+
+async def _cache_set(key: str, value: Any, ttl: int) -> None:
+    """A cache write that never fails the request it is serving."""
+    try:
+        await set_json(key, value, ttl)
+    except Exception:
+        log.exception("entitlement cache write failed")
+
+
 async def resolve_entitlements(session: AsyncSession, user_id: str) -> Entitlements:
-    cached = await get_json(_key(user_id))
+    cached = await _cache_get(_key(user_id))
     if cached is not None:
         entitlement_cache.labels(result="hit").inc()
         return Entitlements.model_validate(cached)
@@ -290,7 +313,7 @@ async def resolve_entitlements(session: AsyncSession, user_id: str) -> Entitleme
     try:
         data = await _resolve_from_db(session, user_id)
     except Exception:
-        stale = await get_json(_stale_key(user_id))
+        stale = await _cache_get(_stale_key(user_id))
         if stale is not None:
             # Worth its own label: serving stale means the database is in
             # trouble, and a rising rate here is an outage in progress.
@@ -304,11 +327,11 @@ async def resolve_entitlements(session: AsyncSession, user_id: str) -> Entitleme
     ttl = _ttl_for(data)
     payload = data.model_dump(mode="json")
     if ttl > 0:
-        await set_json(_key(user_id), payload, ttl)
+        await _cache_set(_key(user_id), payload, ttl)
     # The stale copy is written regardless: it exists to survive a database
     # outage, not to answer normally, and the read path only reaches for it
     # when _resolve_from_db has already failed.
-    await set_json(_stale_key(user_id), payload, _STALE_TTL)
+    await _cache_set(_stale_key(user_id), payload, _STALE_TTL)
     return data
 
 
