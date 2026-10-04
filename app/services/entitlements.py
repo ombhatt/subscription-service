@@ -292,7 +292,7 @@ async def _cache_get(key: str) -> Any | None:
     try:
         return await get_json(key)
     except Exception:
-        log.exception("entitlement cache read failed for %s; treating as a miss", key)
+        log.exception("entitlement cache read failed; treating as a miss")
         return None
 
 
@@ -301,7 +301,7 @@ async def _cache_set(key: str, value: Any, ttl: int) -> None:
     try:
         await set_json(key, value, ttl)
     except Exception:
-        log.exception("entitlement cache write failed for %s", key)
+        log.exception("entitlement cache write failed")
 
 
 async def resolve_entitlements(session: AsyncSession, user_id: str) -> Entitlements:

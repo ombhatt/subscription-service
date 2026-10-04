@@ -94,8 +94,9 @@ async def peek(user_id: str, key: str, entitlements: Entitlements) -> dict[str, 
         used = await get_cache().get_int(_counter_key(user_id, key, start))
     except Exception:
         # Display only: enforcement is `consume`. An unreachable cache must not
-        # take the entitlement payload down with it.
-        log.exception("quota read failed for %s/%s; reporting 0 used", user_id, key)
+        # take the entitlement payload down with it. No identifiers in the
+        # message: the outage is the cache's, not this caller's.
+        log.exception("quota read failed; reporting 0 used")
         used = 0
     return {
         "key": key,
