@@ -214,7 +214,10 @@ terminates TLS in front of the service (Vercel, Fly, Cloudflare, an ALB).
 
 The limiter fails open: if Redis is unreachable the request is allowed and
 `rate_limit_errors_total` increments. Alert on that counter -- a sustained
-non-zero rate means the public endpoint is no longer protected.
+non-zero rate means the public endpoint is no longer protected. Quota
+enforcement makes the same trade and has its own counter,
+`quota_errors_total`: non-zero means metered endpoints are uncapped until Redis
+is back.
 
 Optional, but the reason flags exist:
 
