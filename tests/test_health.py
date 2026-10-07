@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
+from sqlalchemy.engine import Engine
 
 from app import health
 
@@ -53,8 +53,13 @@ class BrokenCache:
 
 
 async def test_liveness_ignores_a_dead_database(client, monkeypatch):
-    """Otherwise a database blip restarts every instance at once."""
-    monkeypatch.setattr(health, "get_sessionmaker", ExplodingSessionmaker())
+    """Otherwise a database blip restarts every instance at once. Every
+    SQLAlchemy connection, whichever sessionmaker it came from, is refused."""
+
+    def refuse(self, *args, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(Engine, "raw_connection", refuse)
     response = await client.get("/healthz")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -114,29 +119,30 @@ async def test_a_hanging_dependency_is_bounded(client, monkeypatch):
 
 
 async def test_the_two_checks_run_concurrently(client, monkeypatch):
-    """Sequential checks make the probe as slow as the sum of its timeouts."""
-    calls: list[str] = []
+    """Sequential checks make the probe as slow as the sum of its timeouts.
 
-    async def slow_db():
-        calls.append("db-start")
-        await asyncio.sleep(0.15)
+    Each check waits for the other to have started, which only concurrent
+    checks can satisfy; run one after the other, the first never finishes and
+    hits its deadline instead."""
+    db_started, cache_started = asyncio.Event(), asyncio.Event()
 
-    async def slow_cache():
-        calls.append("cache-start")
-        await asyncio.sleep(0.15)
+    async def db_waiting_for_cache():
+        db_started.set()
+        await cache_started.wait()
 
-    monkeypatch.setattr(health, "_check_database", slow_db)
-    monkeypatch.setattr(health, "_check_cache", slow_cache)
+    async def cache_waiting_for_db():
+        cache_started.set()
+        await db_started.wait()
 
-    started = asyncio.get_running_loop().time()
-    await client.get("/readyz")
-    elapsed = asyncio.get_running_loop().time() - started
+    monkeypatch.setattr(health, "_check_database", db_waiting_for_cache)
+    monkeypatch.setattr(health, "_check_cache", cache_waiting_for_db)
+    monkeypatch.setattr(health.get_settings(), "db_command_timeout_seconds", 0.5)
+    monkeypatch.setattr(health.get_settings(), "redis_timeout_seconds", 0.5)
 
-    assert calls[:2] == ["db-start", "cache-start"]
-    assert elapsed < 0.28, f"{elapsed:.2f}s looks sequential, not concurrent"
+    response = await client.get("/readyz")
 
-
-@pytest.mark.parametrize("path", ["/healthz", "/readyz"])
-async def test_probes_need_no_credentials(client, path):
-    """A load balancer cannot send an admin key."""
-    assert (await client.get(path)).status_code in (200, 503)
+    assert response.status_code == 200
+    assert {c["name"]: c["ok"] for c in response.json()["checks"]} == {
+        "database": True,
+        "cache": True,
+    }

@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from prometheus_client import REGISTRY as _DEFAULT_REGISTRY  # noqa: F401  (documents the contrast)
 
 from app.observability import (
     JsonFormatter,
     entitlement_cache,
+    event,
     quota_rejections,
     request_id_var,
     webhook_events,
@@ -45,14 +47,14 @@ def test_logs_are_json_with_the_expected_fields():
     assert payload["ts"].endswith("+00:00"), "timestamps must be unambiguous"
 
 
-def test_structured_fields_ride_along():
+def test_structured_fields_ride_along(caplog):
     """`event()` puts its fields at the top level so they are queryable."""
-    record = logging.LogRecord(
-        name="app.test", level=logging.INFO, pathname=__file__, lineno=1,
-        msg="webhook.handled", args=(), exc_info=None,
-    )
-    record.context = {"event": "webhook.handled", "duration_ms": 12.5}
+    with caplog.at_level(logging.INFO, logger="app.test"):
+        event(logging.getLogger("app.test"), "webhook.handled", duration_ms=12.5)
+
+    (record,) = caplog.records
     payload = json.loads(JsonFormatter().format(record))
+    assert payload["msg"] == "webhook.handled"
     assert payload["event"] == "webhook.handled"
     assert payload["duration_ms"] == 12.5
 
@@ -104,8 +106,12 @@ async def test_an_inbound_request_id_is_honoured(client):
 async def test_an_absurd_inbound_request_id_is_replaced(client):
     """Header values are attacker-controlled; an unbounded one would end up in
     every log line for that request."""
-    response = await client.get("/healthz", headers={"X-Request-ID": "x" * 500})
-    assert response.headers["x-request-id"] != "x" * 500
+    absurd = {"X-Request-ID": "x" * 500}
+    first = (await client.get("/healthz", headers=absurd)).headers["x-request-id"]
+    second = (await client.get("/healthz", headers=absurd)).headers["x-request-id"]
+
+    assert re.fullmatch(r"[0-9a-f]{32}", first), f"{first[:40]!r} is not a server-generated id"
+    assert first != second, "each replacement must be fresh, not derived from the header"
 
 
 # --------------------------------------------------------------------------
@@ -113,9 +119,10 @@ async def test_an_absurd_inbound_request_id_is_replaced(client):
 # --------------------------------------------------------------------------
 
 
-async def test_metrics_needs_the_admin_key(client):
-    """It is a precise description of your traffic and failure rates."""
-    assert (await client.get("/metrics")).status_code == 403
+async def test_metrics_needs_the_admin_key_not_just_a_user(client):
+    """It is a precise description of your traffic and failure rates. The route
+    inventory accepts any auth dependency, so only this notices user auth."""
+    assert (await client.get("/metrics", headers=USER)).status_code == 403
 
 
 async def test_metrics_exposes_the_promised_series(client):
@@ -164,14 +171,19 @@ async def test_a_duplicate_is_counted_separately_from_a_grant(client, session, s
     stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
     stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
 
-    before = counter_value(webhook_events, event_type="invoice.paid", outcome="duplicate")
+    duplicates_before = counter_value(webhook_events, event_type="invoice.paid",
+                                      outcome="duplicate")
+    processed_before = counter_value(webhook_events, event_type="invoice.paid",
+                                     outcome="processed")
     payload = webhook_event("evt_m2", "invoice.paid", {"customer": "cus_1"})
     headers = {"stripe-signature": "t=1,v1=fake", "content-type": "application/json"}
     await client.post("/v1/webhooks/stripe", content=payload, headers=headers)
     await client.post("/v1/webhooks/stripe", content=payload, headers=headers)
 
-    after = counter_value(webhook_events, event_type="invoice.paid", outcome="duplicate")
-    assert after == before + 1
+    duplicates = counter_value(webhook_events, event_type="invoice.paid", outcome="duplicate")
+    processed = counter_value(webhook_events, event_type="invoice.paid", outcome="processed")
+    assert duplicates == duplicates_before + 1
+    assert processed == processed_before + 1, "only the first delivery is work done"
 
 
 async def test_cache_hits_and_misses_are_distinguished(client, session):
