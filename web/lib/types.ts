@@ -100,18 +100,6 @@ export function formatAmount(minorUnits: number, currency: string | null): strin
   }).format(amount);
 }
 
-export function formatMoney(price: Price | undefined, interval: Interval): string {
-  if (!price || price.unit_amount === null || !price.currency) return "—";
-  const amount = price.unit_amount / 100;
-  const formatted = new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: price.currency.toUpperCase(),
-    // Whole-dollar prices read better without the trailing .00
-    minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
-  }).format(amount);
-  return `${formatted}/${interval === "annual" ? "yr" : "mo"}`;
-}
-
 // Error bodies are built by app/errors.py's handlers rather than declared as
 // response models, so they are not in the schema and stay written out here.
 

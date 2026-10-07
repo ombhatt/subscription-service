@@ -10,8 +10,10 @@ import type { Entitlements, Plan, Tier } from "../lib/types";
  * produce for real -- a subscriber inside a dunning grace window, a webhook
  * that never arrives, a quota already at its ceiling.
  *
- * Shapes here must match app/schemas.py. When they drift, the contract tests in
- * `contract.spec.ts` are what should fail.
+ * Shapes here must match app/schemas.py. What catches drift is the compiler:
+ * the fake returns the `Entitlements` and `Plan` types from lib/types.ts, which
+ * are generated from the API's OpenAPI schema, so `tsc` fails when they part.
+ * `subscription()` and the error bodies are untyped and have no such guard.
  */
 
 const FEATURES: Record<Tier, Entitlements["features"]> = {
@@ -358,7 +360,7 @@ export function fakeAccessToken(userId = TEST_USER_ID, email = TEST_EMAIL): stri
  */
 export async function signIn(
   page: Page,
-  { userId = TEST_USER_ID, email = TEST_EMAIL } = {},
+  { userId = TEST_USER_ID, email = TEST_EMAIL, loginUrl = "/login" } = {},
 ) {
   const user = {
     id: userId,
@@ -382,7 +384,7 @@ export async function signIn(
   await page.route("**/auth/v1/user**", (route) => route.fulfill({ json: user }));
   await page.route("**/auth/v1/logout**", (route) => route.fulfill({ status: 204, body: "" }));
 
-  await page.goto("/login");
+  await page.goto(loginUrl);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("a-password-long-enough");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();

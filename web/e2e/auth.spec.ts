@@ -8,13 +8,19 @@ import { FakeApi, TEST_EMAIL, expect, mockApi, signIn, test } from "./fixtures";
  * change of identity must reach every component, not just the nav.
  */
 
-test("a signed-out visitor is sent to sign in, and back again after", async ({ page, api }) => {
-  await page.goto("/billing");
+test("a signed-out visitor is sent to sign in, and back again after", async ({ page }) => {
+  // /chat rather than /billing: billing is where signing in lands when `next`
+  // is missing, so it could not show that `next` was followed.
+  await page.goto("/chat");
 
   await expect(page).toHaveURL(/\/login/);
-  // The destination is preserved so signing in does not dump them on the home page.
-  expect(new URL(page.url()).searchParams.get("next")).toBe("/billing");
+  expect(new URL(page.url()).searchParams.get("next")).toBe("/chat");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+  await signIn(page, { loginUrl: page.url() });
+
+  expect(new URL(page.url()).pathname).toBe("/chat");
+  await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
 });
 
 test("the pricing page renders without a session", async ({ page, api }) => {
