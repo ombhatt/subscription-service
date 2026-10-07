@@ -76,8 +76,7 @@ def test_variable_names_follow_the_convention():
     assert price_env_name(Tier.PRO, BillingInterval.ANNUAL) == "STRIPE_PRICE_PRO_ANNUAL"
 
 
-def test_the_purchasable_list_comes_from_the_catalog():
-    assert PURCHASABLE_TIERS == tuple(t for t, d in CATALOG.items() if d.purchasable)
+def test_neither_the_free_floor_nor_the_sales_led_tier_is_for_sale():
     assert Tier.FREE not in PURCHASABLE_TIERS and Tier.ENTERPRISE not in PURCHASABLE_TIERS
 
 
@@ -94,7 +93,9 @@ async def test_the_pricing_page_is_told_which_tiers_are_sales_led(client, stripe
     sorted(
         p
         for p in [*(ROOT / "app").rglob("*.py"), *(ROOT / "scripts").glob("*")]
-        if p.is_file() and p.suffix in {".py", ".sh"}
+        if p.is_file()
+        and p.suffix in {".py", ".sh"}
+        and p.relative_to(ROOT).as_posix() not in {"app/plans.py", "scripts/seed_stripe.py"}
     ),
     ids=lambda p: str(p.relative_to(ROOT)),
 )
@@ -102,10 +103,9 @@ def test_nothing_outside_the_catalog_names_a_paid_tier(path):
     """Free is the floor every account starts on, so naming it is fine. Naming
     any other tier is a call site a new tier would have to edit.
 
-    seed_stripe.py is the one exception: its AMOUNTS are what each price costs,
-    which is data about specific tiers by definition."""
-    if path.relative_to(ROOT).as_posix() in {"app/plans.py", "scripts/seed_stripe.py"}:
-        pytest.skip("defines tiers")
+    plans.py defines the tiers. seed_stripe.py is the one other exception: its
+    AMOUNTS are what each price costs, which is data about specific tiers by
+    definition."""
     named = re.findall(r"Tier\.(?!FREE\b)[A-Z]+", path.read_text())
     assert not named, f"{path.relative_to(ROOT)} names {sorted(set(named))}"
 

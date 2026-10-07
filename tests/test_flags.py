@@ -13,11 +13,16 @@ the wrapper, not the SDK, is what these tests are about.
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
 import pytest
 
 from app import flags
+from app.models import Subscription
 from app.observability import flag_evaluations
 
+APP = pathlib.Path(flags.__file__).resolve().parent
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
 
@@ -120,10 +125,11 @@ async def test_no_client_key_is_a_normal_state_not_a_failure(monkeypatch):
 
 
 async def test_a_configured_flag_overrides_the_default():
+    before = counter("checkout-enabled", "remote")
     flags.set_client_for_tests(StubClient({"checkout-enabled": False}))
     try:
         assert await flags.is_enabled("checkout-enabled") is False
-        assert counter("checkout-enabled", "remote") > 0
+        assert counter("checkout-enabled", "remote") == before + 1
     finally:
         flags.set_client_for_tests(None)
 
@@ -149,10 +155,49 @@ async def test_an_anonymous_read_still_has_a_stable_key():
         flags.set_client_for_tests(None)
 
 
-async def test_every_flag_has_a_default():
+def _flags_read_in_app() -> set[str]:
+    """Every string-literal flag name passed to `is_enabled` or `value` from
+    `app.flags`, found by walking the AST of each module under app/.
+
+    A flag name built at runtime is invisible to this.
+    """
+    readers = {"is_enabled", "value"}
+    found: set[str] = set()
+    for path in APP.rglob("*.py"):
+        if path.name == "flags.py":
+            continue
+        tree = ast.parse(path.read_text())
+        imported = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module == "app.flags"
+            for alias in node.names
+            if alias.name in readers
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            direct = isinstance(func, ast.Name) and func.id in imported
+            via_module = (
+                isinstance(func, ast.Attribute)
+                and func.attr in readers
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "flags"
+            )
+            first = node.args[0]
+            if (direct or via_module) and isinstance(first, ast.Constant):
+                found.add(first.value)
+    return found
+
+
+async def test_every_flag_read_in_the_app_has_a_default():
     """A flag read but not declared returns None, which is never what the
     caller meant. This is the guard for that."""
-    assert flags.DEFAULTS, "at least one flag should be declared"
+    read = _flags_read_in_app()
+    assert "checkout-enabled" in read, f"flag discovery is broken, it found only {read}"
+    undeclared = read - set(flags.DEFAULTS)
+    assert not undeclared, f"read in app/ but missing from DEFAULTS: {sorted(undeclared)}"
     for name, default in flags.DEFAULTS.items():
         assert default is not None, f"{name} has no usable default"
 
@@ -192,13 +237,17 @@ async def test_the_kill_switch_refuses_checkout_cleanly(client, stripe, session)
 
 async def test_the_kill_switch_does_not_touch_existing_access(client, stripe, session):
     """Turning off new purchases must not revoke anything already paid for."""
+    session.add(Subscription(user_id="alice", tier="pro", status="active"))
+    await session.commit()
+
     flags.set_client_for_tests(StubClient({"checkout-enabled": False}))
     try:
         entitlements = await client.get("/v1/entitlements", headers=USER)
     finally:
         flags.set_client_for_tests(None)
     assert entitlements.status_code == 200
-    assert entitlements.json()["tier"] == "free"
+    assert entitlements.json()["tier"] == "pro"
+    assert entitlements.json()["source"] == "subscription"
 
 
 @pytest.fixture(autouse=True)
