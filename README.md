@@ -551,7 +551,9 @@ A liveness probe that checks the database restarts every instance when the
 database blinks, so `/healthz` touches nothing. `/readyz` returns 503 when
 Postgres is unreachable but **200 `"degraded"` when only Redis is** — the read
 path falls back to the database, and Redis is shared, so failing readiness on it
-would empty the load balancer and turn a cache outage into a total one.
+would empty the load balancer and turn a cache outage into a total one. While
+Redis is down, quota caps are not enforced: metered requests are allowed,
+counted in `quota_errors_total`, and still recorded in `usage_counters`.
 
 Reconciliation exists because you *will* miss webhooks — an outage, a bad
 deploy, a 500 inside a retry window. The only question is whether you find out
@@ -658,6 +660,7 @@ three this file has always told you to alert on:
 | `webhook_events_total{event_type,outcome}` | processed / duplicate / ignored / failed |
 | `entitlement_cache_total{result}` | hit / miss / **stale** — a rising stale rate is an outage in progress |
 | `quota_rejections_total{quota,tier}` | how often the paywall actually fires |
+| `quota_errors_total{quota}` | quota checks that could not reach Redis and let the request through — **alert on it**: non-zero means caps are not being enforced |
 
 Two limits worth knowing. Metrics are per-process and in memory, so under
 several workers a scrape sees one of them — `prometheus_client`'s multiprocess
