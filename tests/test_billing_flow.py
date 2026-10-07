@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import webhook_event
+from tests.conftest import TOKEN_SUBJECT, webhook_event
 
 USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
 ADMIN = {"X-Admin-Key": "test-admin-key", "X-Admin-Actor": "support@example.com"}
@@ -29,8 +29,34 @@ async def test_new_user_is_free_without_any_setup(client, stripe):
     assert any(q["key"] == "messages_per_day" and q["limit"] == 20 for q in body["quotas"])
 
 
-async def test_unauthenticated_requests_are_rejected(client):
-    assert (await client.get("/v1/entitlements")).status_code == 401
+async def test_a_token_is_served_as_the_user_it_names(real_auth_client, signer):
+    grant = await real_auth_client.post(
+        "/v1/admin/grants",
+        json={"user_id": TOKEN_SUBJECT, "tier": "pro", "reason": "token identity"},
+        headers=ADMIN,
+    )
+    assert grant.status_code == 200
+
+    granted = await real_auth_client.get(
+        "/v1/entitlements", headers={"Authorization": f"Bearer {signer()}"}
+    )
+    other = await real_auth_client.get(
+        "/v1/entitlements", headers={"Authorization": f"Bearer {signer(sub='someone-else')}"}
+    )
+
+    assert granted.status_code == 200
+    assert granted.json()["tier"] == "pro"
+    assert other.json()["tier"] == "free"
+
+
+async def test_a_token_from_another_supabase_project_is_refused(real_auth_client, signer):
+    """Any Supabase project signs valid JWTs, so a stranger can mint one naming
+    any user id they like."""
+    forged = signer(iss="https://attacker.supabase.co/auth/v1")
+    response = await real_auth_client.get(
+        "/v1/entitlements", headers={"Authorization": f"Bearer {forged}"}
+    )
+    assert response.status_code == 401
 
 
 async def test_a_locked_model_names_the_tier_that_unlocks_it(client, stripe):
@@ -81,17 +107,23 @@ async def test_full_upgrade_flow(client, stripe):
 
 
 async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):
+    """The local row alone refuses. Stripe has already ended the subscription
+    here and that webhook has not landed, so asking Stripe would allow the
+    checkout: only the row can say no."""
     await client.post(
         "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
     await webhook(client, "evt_s1", "customer.subscription.created", customer)
+    stripe.set_subscription(customer, status="canceled", price_id="price_pro_m")
 
     again = await client.post(
         "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
     )
+
     assert again.status_code == 409, "plan changes belong in the portal, not a second subscription"
+    assert len(stripe.checkout_sessions) == 1, "no second checkout session was created"
 
 
 @pytest.mark.parametrize("stripe_status", ["active", "trialing", "past_due", "unpaid"])

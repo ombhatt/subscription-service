@@ -32,7 +32,7 @@ test("upgrading while signed out asks you to sign in first", async ({ page, api 
   await page.getByRole("button", { name: "Upgrade to Pro" }).click();
 
   await expect(page).toHaveURL(/\/login/);
-  expect(api.checkoutCalls).toBe(0);
+  expect(api.checkoutBodies).toEqual([]);
 });
 
 test("signing in reaches every component, not just the nav", async ({ page }) => {
