@@ -131,17 +131,15 @@ async def test_a_discount_is_mirrored_and_then_cleared(client, session, stripe):
     from sqlalchemy import select
 
     from app.models import Subscription
-    from tests.conftest import webhook_event
+    from tests.conftest import deliver, webhook_event
 
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_1"))
     await session.commit()
     sub = stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
     sub["discounts"] = EXPANDED["discounts"]
 
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=webhook_event("evt_d1", "customer.subscription.updated", {"customer": "cus_1"}),
-        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
+    await deliver(
+        client, webhook_event("evt_d1", "customer.subscription.updated", {"customer": "cus_1"})
     )
 
     row = (await session.execute(select(Subscription))).scalar_one()
@@ -151,10 +149,8 @@ async def test_a_discount_is_mirrored_and_then_cleared(client, session, stripe):
     assert row.discount["coupon_id"] == "DzxbTbdd"
 
     stripe.subscriptions.pop("cus_1")
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=webhook_event("evt_d2", "customer.subscription.deleted", {"customer": "cus_1"}),
-        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
+    await deliver(
+        client, webhook_event("evt_d2", "customer.subscription.deleted", {"customer": "cus_1"})
     )
 
     row = (await session.execute(select(Subscription))).scalar_one()

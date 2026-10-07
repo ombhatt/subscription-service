@@ -6,18 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TOKEN_SUBJECT, webhook_event
+from tests.conftest import TOKEN_SUBJECT, deliver, webhook_event
 
 USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
 ADMIN = {"X-Admin-Key": "test-admin-key", "X-Admin-Actor": "support@example.com"}
-
-
-async def webhook(client, event_id: str, event_type: str, customer: str):
-    return await client.post(
-        "/v1/webhooks/stripe",
-        content=webhook_event(event_id, event_type, {"customer": customer}),
-        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
-    )
 
 
 async def test_new_user_is_free_without_any_setup(client, stripe):
@@ -86,7 +78,9 @@ async def test_full_upgrade_flow(client, stripe):
     # 3. the webhook is what grants
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    granted = await webhook(client, "evt_up", "checkout.session.completed", customer)
+    granted = await deliver(
+        client, webhook_event("evt_up", "checkout.session.completed", {"customer": customer})
+    )
     assert granted.status_code == 200
 
     ents = (await client.get("/v1/entitlements", headers=USER)).json()
@@ -115,7 +109,9 @@ async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    await webhook(client, "evt_s1", "customer.subscription.created", customer)
+    await deliver(
+        client, webhook_event("evt_s1", "customer.subscription.created", {"customer": customer})
+    )
     stripe.set_subscription(customer, status="canceled", price_id="price_pro_m")
 
     again = await client.post(
@@ -167,7 +163,9 @@ async def test_cancellation_returns_the_user_to_free(client, stripe):
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    await webhook(client, "evt_c1", "customer.subscription.created", customer)
+    await deliver(
+        client, webhook_event("evt_c1", "customer.subscription.created", {"customer": customer})
+    )
     # Read once so the entitlement set is cached; cancelling must invalidate it
     # even though neither tier nor status changes.
     assert (await client.get("/v1/entitlements", headers=USER)).json()["tier"] == "pro"
@@ -176,14 +174,18 @@ async def test_cancellation_returns_the_user_to_free(client, stripe):
     stripe.set_subscription(
         customer, status="active", price_id="price_pro_m", cancel_at_period_end=True
     )
-    await webhook(client, "evt_c2", "customer.subscription.updated", customer)
+    await deliver(
+        client, webhook_event("evt_c2", "customer.subscription.updated", {"customer": customer})
+    )
     ents = (await client.get("/v1/entitlements", headers=USER)).json()
     assert ents["tier"] == "pro"
     assert ents["cancel_at_period_end"] is True
 
     # Boundary reached.
     stripe.subscriptions.pop(customer)
-    await webhook(client, "evt_c3", "customer.subscription.deleted", customer)
+    await deliver(
+        client, webhook_event("evt_c3", "customer.subscription.deleted", {"customer": customer})
+    )
     assert (await client.get("/v1/entitlements", headers=USER)).json()["tier"] == "free"
 
 

@@ -462,3 +462,11 @@ def stripe(monkeypatch) -> FakeStripe:
 
 def webhook_event(event_id: str, event_type: str, obj: dict) -> str:
     return json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}})
+
+
+async def deliver(client, payload: str):
+    return await client.post(
+        "/v1/webhooks/stripe",
+        content=payload,
+        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
+    )

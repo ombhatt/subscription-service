@@ -14,13 +14,12 @@ price working after it leaves the configuration.
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy import func, select
 
 from app.jobs.reconcile import reconcile
 from app.models import Subscription
 from app.services.subscriptions import get_subscription, sync_subscription_from_stripe
+from tests.conftest import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 # A price this service does not sell, with no tier metadata -- the shape another
@@ -52,16 +51,8 @@ async def test_their_webhook_is_acknowledged_and_ignored(client, session, stripe
     someone else's event forever."""
     customer = foreign_customer(stripe)
 
-    response = await client.post(
-        "/v1/webhooks/stripe",
-        content=json.dumps(
-            {
-                "id": "evt_theirs",
-                "type": "customer.subscription.updated",
-                "data": {"object": {"customer": customer}},
-            }
-        ),
-        headers={"stripe-signature": "t=1,v1=fake"},
+    response = await deliver(
+        client, webhook_event("evt_theirs", "customer.subscription.updated", {"customer": customer})
     )
 
     assert response.status_code == 200

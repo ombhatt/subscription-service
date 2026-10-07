@@ -20,7 +20,7 @@ from app.observability import (
     request_id_var,
     webhook_events,
 )
-from tests.conftest import webhook_event
+from tests.conftest import deliver, webhook_event
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
@@ -152,9 +152,9 @@ async def test_a_handled_webhook_is_counted(client, session, stripe):
     before = counter_value(webhook_events, event_type="customer.subscription.updated",
                            outcome="processed")
 
-    payload = webhook_event("evt_m1", "customer.subscription.updated", {"customer": "cus_1"})
-    headers = {"stripe-signature": "t=1,v1=fake", "content-type": "application/json"}
-    await client.post("/v1/webhooks/stripe", content=payload, headers=headers)
+    await deliver(
+        client, webhook_event("evt_m1", "customer.subscription.updated", {"customer": "cus_1"})
+    )
 
     after = counter_value(webhook_events, event_type="customer.subscription.updated",
                           outcome="processed")
@@ -174,9 +174,8 @@ async def test_a_duplicate_is_counted_separately_from_a_grant(client, session, s
     processed_before = counter_value(webhook_events, event_type="invoice.paid",
                                      outcome="processed")
     payload = webhook_event("evt_m2", "invoice.paid", {"customer": "cus_1"})
-    headers = {"stripe-signature": "t=1,v1=fake", "content-type": "application/json"}
-    await client.post("/v1/webhooks/stripe", content=payload, headers=headers)
-    await client.post("/v1/webhooks/stripe", content=payload, headers=headers)
+    await deliver(client, payload)
+    await deliver(client, payload)
 
     duplicates = counter_value(webhook_events, event_type="invoice.paid", outcome="duplicate")
     processed = counter_value(webhook_events, event_type="invoice.paid", outcome="processed")
