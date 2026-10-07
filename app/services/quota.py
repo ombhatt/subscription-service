@@ -4,6 +4,11 @@ Redis is the enforcement path: an atomic INCR against a key whose TTL expires
 exactly when the window does, so counters clean themselves up and no reset job
 exists to fall behind. Postgres holds a mirror for support and analytics.
 
+When Redis is unreachable, enforcement fails open: the request is allowed,
+`quota_errors_total` counts it, and the mirror still records it. A paying
+customer refused by our outage is worse than a few uncounted requests -- the
+same trade the read path and the contact-sales rate limiter make.
+
 The window is the subtle part. A "daily" cap resets at UTC midnight for
 everyone; a "billing period" cap resets on the subscriber's own renewal date,
 which is a different day for almost every customer. Getting those two confused
@@ -23,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.cache import get_cache
 from app.errors import QuotaExceeded
 from app.models import UsageCounter
-from app.observability import quota_rejections
+from app.observability import quota_errors, quota_rejections
 from app.plans import CATALOG, TIER_RANK, QuotaWindow, Tier
 from app.services.entitlements import Entitlements
 from app.timeutil import as_utc
@@ -90,7 +95,14 @@ async def peek(user_id: str, key: str, entitlements: Entitlements) -> dict[str, 
         return None
     limit = found.limit
     start, end = window_for(found.window, entitlements)
-    used = await get_cache().get_int(_counter_key(user_id, key, start))
+    try:
+        used = await get_cache().get_int(_counter_key(user_id, key, start))
+    except Exception:
+        # Display only: enforcement is `consume`. An unreachable cache must not
+        # take the entitlement payload down with it. No identifiers in the
+        # message: the outage is the cache's, not this caller's.
+        log.exception("quota read failed; reporting 0 used")
+        used = 0
     return {
         "key": key,
         "limit": limit,
@@ -132,7 +144,14 @@ async def consume(
     limit = found.limit
     start, end = window_for(found.window, entitlements)
     ttl = max(60, int((end - datetime.now(UTC)).total_seconds()))
-    used = await get_cache().incr(_counter_key(user_id, key, start), ttl)
+    try:
+        used = await get_cache().incr(_counter_key(user_id, key, start), ttl)
+    except Exception:
+        quota_errors.labels(quota=key).inc()
+        log.exception("quota check for %s failed; allowing the request", key)
+        await _mirror(session.bind, user_id=user_id, key=key, start=start, end=end)
+        # Not counted, so reported like peek() reports an unreachable counter.
+        return {"key": key, "limit": limit, "used": 0, "remaining": limit}
 
     if limit is not None and used > limit:
         current = entitlements.tier

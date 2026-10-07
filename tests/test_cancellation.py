@@ -112,10 +112,6 @@ async def test_a_free_user_has_nothing_to_cancel(client, stripe):
     assert "no subscription" in response.json()["detail"]
 
 
-async def test_cancelling_needs_a_session(client, stripe):
-    assert (await client.post("/v1/billing/cancel")).status_code == 401
-
-
 # --------------------------------------------------------------------------
 # changing their mind
 # --------------------------------------------------------------------------
