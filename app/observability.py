@@ -96,6 +96,17 @@ quota_rejections = Counter(
     registry=REGISTRY,
 )
 
+quota_errors = Counter(
+    "quota_errors_total",
+    "Quota checks that could not run. The request was allowed anyway.",
+    ["quota"],
+    registry=REGISTRY,
+)
+
+# Quota enforcement fails open, so this is the only sign that caps are not
+# being enforced. Alert on a sustained non-zero rate: the cache is unreachable
+# and every metered endpoint is uncapped until it is back.
+
 subscription_transitions = Counter(
     "subscription_transitions_total",
     "Tier changes, by where they ended up.",

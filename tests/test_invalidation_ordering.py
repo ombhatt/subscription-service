@@ -42,81 +42,92 @@ def counter(outcome: str) -> float:
     return entitlement_invalidations.labels(outcome=outcome)._value.get()
 
 
-async def test_a_reader_between_the_write_and_the_commit_does_not_win(
-    sessionmaker_, stripe
-):
-    """The interleaving that used to serve a paying customer their old tier.
-
-    Two sessions, as two concurrent requests would be. The reader runs while
-    the writer's transaction is open, so it sees the pre-commit row and caches
-    it -- that part is unavoidable and fine. What matters is what happens next:
-    the commit must drop that entry, and it can only do so if the invalidation
-    comes after it.
-    """
+async def _paid_and_synced_but_uncommitted(sessionmaker_, stripe):
+    """The webhook has landed and `sync` has flushed pro; nothing is committed."""
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
-
     stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
     stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
 
     writer = sessionmaker_()
-    reader = sessionmaker_()
+    await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
+    return writer
+
+
+async def test_a_reader_just_before_the_commit_does_not_win(sessionmaker_, stripe):
+    """The interleaving that used to serve a paying customer their old tier.
+
+    A concurrent request runs at the last moment the writer's transaction is
+    still open, inside `commit_and_invalidate`, and caches the pre-commit row.
+    That is unavoidable and fine as long as the invalidation comes after the
+    commit and drops it. Invalidate first and this read lands after the
+    invalidation, so its stale answer is what stays cached.
+    """
+    writer = await _paid_and_synced_but_uncommitted(sessionmaker_, stripe)
+    real_commit = writer.commit
+    seen_before_commit = []
+
+    async def commit_with_a_reader_in_the_window():
+        async with sessionmaker_() as reader:
+            seen_before_commit.append((await resolve_entitlements(reader, USER)).tier)
+        await real_commit()
+
+    writer.commit = commit_with_a_reader_in_the_window
     try:
-        # The customer has paid; the webhook is being handled.
-        await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
-
-        # A concurrent request lands mid-transaction and caches what it sees.
-        stale = await resolve_entitlements(reader, USER)
-        assert stale.tier == "free", "precondition: the write is not committed yet"
-
-        # The handler finishes.
         await commit_and_invalidate(writer)
+    finally:
+        await writer.close()
 
-        # The cached answer must be gone, not merely outdated.
-        fresh = await resolve_entitlements(reader, USER)
-        assert fresh.tier == "pro", (
+    assert seen_before_commit == ["free"], "precondition: the reader ran pre-commit"
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER)).tier == "pro", (
             "a paying customer is still being served their old tier -- the "
             "invalidation ran before the commit and a reader repopulated it"
         )
+
+
+async def test_sync_leaves_the_cached_entry_in_place_until_the_commit(
+    sessionmaker_, stripe
+):
+    """Sync does not commit, so clearing the cache there would let a reader
+    repopulate it from the uncommitted row. The probe reads through the
+    writer's own session, which sees the flushed pro row, so a free answer
+    can only have come from the cache."""
+    await _paid_but_cached_as_free(sessionmaker_, stripe)
+
+    writer = sessionmaker_()
+    try:
+        await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
+        assert (await resolve_entitlements(writer, USER)).tier == "free", (
+            "sync cleared the cached entry before its transaction committed"
+        )
+        await commit_and_invalidate(writer)
     finally:
         await writer.close()
-        await reader.close()
 
-
-async def test_sync_does_not_touch_the_cache_itself(sessionmaker_, stripe):
-    """It cannot: it does not commit. Its caller does, a frame up."""
-    async with sessionmaker_() as setup:
-        setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
-        await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
-
-    async with sessionmaker_() as writer:
-        await resolve_entitlements(writer, USER)  # populate
-        await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
-        # Marked, not deleted.
-        assert writer.sync_session.info.get("entitlements_to_invalidate") == {USER}
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER)).tier == "pro", (
+            "the commit did not drop the cached entry"
+        )
 
 
 async def test_a_rolled_back_write_invalidates_nothing(sessionmaker_, stripe):
     """`session.info` is not transactional, so marks outlive a rollback on
     their own. The webhook failure path rolls back and then commits an error
-    record -- without discarding them it would invalidate for a write that
-    never happened."""
-    async with sessionmaker_() as setup:
-        setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
-        await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
-
-    async with sessionmaker_() as writer:
-        await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
-        assert writer.sync_session.info.get("entitlements_to_invalidate")
+    record with a plain commit -- without discarding the marks, the detector
+    would report a dropped invalidation on every failed webhook."""
+    writer = await _paid_and_synced_but_uncommitted(sessionmaker_, stripe)
+    before = counter("undrained")
+    try:
         await writer.rollback()
-        assert not writer.sync_session.info.get("entitlements_to_invalidate"), (
-            "a rolled-back write changes nothing and so invalidates nothing"
-        )
+        await writer.commit()
+    finally:
+        await writer.close()
+
+    assert counter("undrained") == before, (
+        "a rolled-back write changes nothing and so invalidates nothing"
+    )
 
 
 @pytest.mark.allow_undrained
