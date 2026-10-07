@@ -81,21 +81,6 @@ class ReconcileReport:
     notified: list[str] = field(default_factory=list)
     unnotified: list[str] = field(default_factory=list)
 
-    def as_dict(self) -> dict:
-        return {
-            "checked": self.checked,
-            "mismatched": self.mismatched,
-            "repaired": self.repaired,
-            "failed": self.failed,
-            "ignored": self.ignored,
-            "unknown_customers": self.unknown_customers,
-            "details": self.details,
-            "orphaned": self.orphaned,
-            "orphaned_closed": self.orphaned_closed,
-            "notified": self.notified,
-            "unnotified": self.unnotified,
-        }
-
 
 async def reconcile(
     session: AsyncSession,
