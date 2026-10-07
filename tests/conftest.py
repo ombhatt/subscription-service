@@ -416,7 +416,10 @@ class FakeStripe:
         period_end: int = 1_702_592_000,
         cancel_at_period_end: bool = False,
         subscription_id: str = "sub_test",
+        user_id: str | None = None,
     ) -> dict:
+        if user_id is not None:
+            self.customers[customer_id] = {"id": customer_id, "metadata": {"user_id": user_id}}
         sub = {
             "id": subscription_id,
             "customer": customer_id,

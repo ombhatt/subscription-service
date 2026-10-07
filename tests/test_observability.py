@@ -147,8 +147,7 @@ async def test_a_handled_webhook_is_counted(client, session, stripe):
 
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_1"))
     await session.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     before = counter_value(webhook_events, event_type="customer.subscription.updated",
                            outcome="processed")
@@ -168,8 +167,7 @@ async def test_a_duplicate_is_counted_separately_from_a_grant(client, session, s
 
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_1"))
     await session.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     duplicates_before = counter_value(webhook_events, event_type="invoice.paid",
                                       outcome="duplicate")

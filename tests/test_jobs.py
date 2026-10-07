@@ -47,8 +47,7 @@ async def reload(session, sub) -> Subscription:
 
 async def test_a_row_that_already_agrees_with_stripe_is_left_alone(session, stripe):
     await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     report = await reconcile(session)
 
@@ -60,8 +59,7 @@ async def test_a_row_that_already_agrees_with_stripe_is_left_alone(session, stri
 async def test_a_missed_webhook_shows_up_as_drift_and_is_repaired(session, stripe):
     """The whole reason this job exists: local says free, Stripe says paid."""
     sub = await seed(session, tier=Tier.FREE.value, status=SubscriptionStatus.FREE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     report = await reconcile(session)
 
@@ -80,8 +78,7 @@ async def test_a_missed_webhook_shows_up_as_drift_and_is_repaired(session, strip
 async def test_drift_the_other_way_is_caught_too(session, stripe):
     """Local still granting Pro after Stripe cancelled -- access nobody paid for."""
     sub = await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="canceled", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="canceled", price_id="price_pro_m")
 
     report = await reconcile(session)
 
@@ -93,8 +90,7 @@ async def test_drift_the_other_way_is_caught_too(session, stripe):
 async def test_dry_run_reports_without_touching_anything(session, stripe):
     """So you can look at drift before letting a job rewrite rows."""
     sub = await seed(session, tier=Tier.FREE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     report = await reconcile(session, dry_run=True)
 
@@ -106,8 +102,8 @@ async def test_dry_run_reports_without_touching_anything(session, stripe):
 
 async def test_a_customer_stripe_knows_about_and_we_do_not(session, stripe):
     """A checkout whose webhook never arrived leaves exactly this shape."""
-    stripe.customers["cus_ghost"] = {"id": "cus_ghost", "metadata": {"user_id": "ghost-user"}}
-    stripe.set_subscription("cus_ghost", status="active", price_id="price_plus_m")
+    stripe.set_subscription("cus_ghost", user_id="ghost-user", status="active",
+                            price_id="price_plus_m")
 
     report = await reconcile(session)
 
@@ -138,9 +134,8 @@ async def test_every_page_is_walked(session, stripe):
     stops early, drift on later pages is silently never found."""
     for n in range(1, 6):
         await seed(session, user_id=f"u{n}", stripe_customer_id=f"cus_{n}")
-        stripe.customers[f"cus_{n}"] = {"id": f"cus_{n}", "metadata": {"user_id": f"u{n}"}}
-        stripe.set_subscription(f"cus_{n}", status="active", price_id="price_pro_m",
-                                subscription_id=f"sub_{n}")
+        stripe.set_subscription(f"cus_{n}", user_id=f"u{n}", status="active",
+                                price_id="price_pro_m", subscription_id=f"sub_{n}")
     stripe.page_size = 2   # forces three pages
 
     report = await reconcile(session)
@@ -160,9 +155,8 @@ async def test_one_customer_failing_does_not_undo_the_others(
     """
     for n in ("a", "b", "c"):
         await seed(session, user_id=f"u{n}", stripe_customer_id=f"cus_{n}")
-        stripe.customers[f"cus_{n}"] = {"id": f"cus_{n}", "metadata": {"user_id": f"u{n}"}}
-        stripe.set_subscription(f"cus_{n}", status="active", price_id="price_pro_m",
-                                subscription_id=f"sub_{n}")
+        stripe.set_subscription(f"cus_{n}", user_id=f"u{n}", status="active",
+                                price_id="price_pro_m", subscription_id=f"sub_{n}")
 
     async def flaky(customer_id):
         if customer_id == "cus_b":
@@ -196,9 +190,8 @@ async def test_each_repair_commits_before_the_next_customer_is_fetched(
 
     for n in ("a", "b"):
         await seed(session, user_id=f"u{n}", stripe_customer_id=f"cus_{n}")
-        stripe.customers[f"cus_{n}"] = {"id": f"cus_{n}", "metadata": {"user_id": f"u{n}"}}
-        stripe.set_subscription(f"cus_{n}", status="active", price_id="price_pro_m",
-                                subscription_id=f"sub_{n}")
+        stripe.set_subscription(f"cus_{n}", user_id=f"u{n}", status="active",
+                                price_id="price_pro_m", subscription_id=f"sub_{n}")
 
     events: list[str] = []
     real_fetch = stripe_client.fetch_current_subscription
@@ -251,15 +244,10 @@ class Outbox:
         self.sent.append((subject, body))
 
 
-def paying(stripe, customer_id="cus_1", user_id="u1", subscription_id="sub_1", **kwargs):
-    stripe.customers[customer_id] = {"id": customer_id, "metadata": {"user_id": user_id}}
-    return stripe.set_subscription(customer_id, price_id="price_pro_m",
-                                   subscription_id=subscription_id, **kwargs)
-
-
 async def test_a_deleted_accounts_subscription_is_reported_not_resynced(session, stripe):
     sub = await seed(session, tier=Tier.FREE.value)
-    paying(stripe, status="active", cancel_at_period_end=True)
+    stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1",
+                            cancel_at_period_end=True)
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
 
@@ -279,7 +267,7 @@ async def test_a_deleted_accounts_subscription_is_reported_not_resynced(session,
 
 async def test_an_orphan_is_marked_in_stripe_where_someone_would_act_on_it(session, stripe):
     await seed(session)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
 
@@ -289,7 +277,7 @@ async def test_an_orphan_is_marked_in_stripe_where_someone_would_act_on_it(sessi
 
 
 async def test_no_row_is_invented_for_a_deleted_account(session, stripe):
-    paying(stripe, customer_id="cus_9", user_id="u9")
+    stripe.set_subscription("cus_9", user_id="u9", subscription_id="sub_1")
 
     report = await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
 
@@ -312,7 +300,8 @@ async def test_the_user_is_found_on_the_subscription_when_the_customer_lacks_it(
 
 async def test_an_ended_subscription_of_a_deleted_account_is_only_counted(session, stripe):
     await seed(session)  # a cancelled subscription mirrors as free
-    remote = paying(stripe, status="canceled")
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1",
+                                     status="canceled")
     outbox = Outbox()
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=outbox)
@@ -325,8 +314,8 @@ async def test_an_ended_subscription_of_a_deleted_account_is_only_counted(sessio
 async def test_a_live_account_in_the_same_run_is_still_repaired(session, stripe):
     await seed(session, tier=Tier.FREE.value)
     await seed(session, user_id="u2", stripe_customer_id="cus_2", tier=Tier.FREE.value)
-    paying(stripe)
-    paying(stripe, customer_id="cus_2", user_id="u2", subscription_id="sub_2")
+    stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
+    stripe.set_subscription("cus_2", user_id="u2", subscription_id="sub_2")
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=Outbox())
 
@@ -339,7 +328,7 @@ async def test_a_live_account_in_the_same_run_is_still_repaired(session, stripe)
 
 async def test_cannot_tell_is_never_read_as_deleted(session, stripe):
     await seed(session, tier=Tier.FREE.value)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     remote["metadata"] = {"orphaned_at": "2026-09-01T00:00:00+00:00"}
 
     report = await reconcile(
@@ -353,7 +342,7 @@ async def test_cannot_tell_is_never_read_as_deleted(session, stripe):
 
 async def test_a_mark_on_an_account_that_exists_is_cleared(session, stripe):
     await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     remote["metadata"] = {"user_id": "u1", "orphaned_at": "2026-09-01T00:00:00+00:00",
                           "orphan_notified_at": "2026-09-01T00:00:05+00:00"}
 
@@ -364,7 +353,7 @@ async def test_a_mark_on_an_account_that_exists_is_cleared(session, stripe):
 
 async def test_orphans_are_reported_on_a_dry_run_without_marking_or_email(session, stripe):
     await seed(session, tier=Tier.FREE.value)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     outbox = Outbox()
 
     report = await reconcile(session, dry_run=True, accounts=Accounts(deleted={"u1"}),
@@ -383,9 +372,9 @@ async def test_orphans_are_reported_on_a_dry_run_without_marking_or_email(sessio
 async def test_new_orphans_are_emailed_once_in_a_single_message(session, stripe):
     await seed(session)
     await seed(session, user_id="u2", stripe_customer_id="cus_2")
-    paying(stripe)
-    paying(stripe, customer_id="cus_2", user_id="u2", subscription_id="sub_2",
-           cancel_at_period_end=True)
+    stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
+    stripe.set_subscription("cus_2", user_id="u2", subscription_id="sub_2",
+                            cancel_at_period_end=True)
     outbox = Outbox()
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1", "u2"}), notifier=outbox)
@@ -402,7 +391,7 @@ async def test_new_orphans_are_emailed_once_in_a_single_message(session, stripe)
 
 async def test_an_orphan_already_emailed_about_is_not_emailed_again(session, stripe):
     await seed(session)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     outbox = Outbox()
     accounts = Accounts(deleted={"u1"})
 
@@ -417,7 +406,7 @@ async def test_an_orphan_already_emailed_about_is_not_emailed_again(session, str
 
 async def test_without_email_configured_the_orphan_is_left_unnotified(session, stripe):
     await seed(session)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
 
     report = await reconcile(session, accounts=Accounts(deleted={"u1"}), notifier=None)
 
@@ -428,7 +417,7 @@ async def test_without_email_configured_the_orphan_is_left_unnotified(session, s
 
 async def test_a_failed_send_is_retried_on_the_next_run(session, stripe):
     await seed(session)
-    remote = paying(stripe)
+    remote = stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     accounts = Accounts(deleted={"u1"})
 
     first = await reconcile(session, accounts=accounts, notifier=Outbox(down=True))
@@ -445,7 +434,7 @@ async def test_a_webhook_does_not_bring_a_deleted_account_back(session, stripe):
     webhook for a customer with no row used to create one."""
     from app.services.subscriptions import sync_subscription_from_stripe
 
-    paying(stripe, customer_id="cus_9", user_id="u9")
+    stripe.set_subscription("cus_9", user_id="u9", subscription_id="sub_1")
     await reconcile(session, accounts=Accounts(deleted={"u9"}), notifier=Outbox())
 
     # The webhook the mark just fired. No account lookup on this path.
@@ -607,11 +596,9 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     from app.observability import reconciliation_drift
 
     await seed(session, tier=Tier.FREE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
-    stripe.customers["cus_ghost"] = {"id": "cus_ghost", "metadata": {"user_id": "ghost-user"}}
-    stripe.set_subscription("cus_ghost", status="active", price_id="price_plus_m",
-                            subscription_id="sub_ghost")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_ghost", user_id="ghost-user", status="active",
+                            price_id="price_plus_m", subscription_id="sub_ghost")
 
     monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
     monkeypatch.setattr(job, "dispose_engine", _noop)
@@ -642,8 +629,7 @@ async def test_reconcile_main_fails_the_process_when_a_repair_failed(
     from app.jobs import reconcile as job
 
     await seed(session, tier=Tier.FREE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
     async def stripe_down(customer_id):
         raise ConnectionError("stripe is down")
@@ -667,7 +653,7 @@ async def test_reconcile_main_reports_orphans_on_the_line_the_alert_watches(
     from app.jobs import reconcile as job
 
     await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-    paying(stripe)
+    stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
     outbox = Outbox()
 
     monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
@@ -691,7 +677,7 @@ async def test_reconcile_main_fails_when_nobody_could_be_told(session, stripe, m
     from app.jobs import reconcile as job
 
     await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-    paying(stripe)
+    stripe.set_subscription("cus_1", user_id="u1", subscription_id="sub_1")
 
     monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
     monkeypatch.setattr(job, "email_notifier", lambda: None)
@@ -741,8 +727,7 @@ async def test_the_two_nightly_jobs_do_not_undo_each_other(session, stripe):
     """Three nights. The stored mirror holds, the served tier holds, drift stays
     at zero, and exactly one audit row is written."""
     await seed(session, **past_due(days_ago=10))
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="past_due", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id="u1", status="past_due", price_id="price_pro_m")
 
     for night in range(3):
         await expire_grace_windows(session)

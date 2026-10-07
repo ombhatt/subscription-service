@@ -47,8 +47,7 @@ async def _paid_and_synced_but_uncommitted(sessionmaker_, stripe):
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
 
     writer = sessionmaker_()
     await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
@@ -199,12 +198,11 @@ async def _paid_but_cached_as_free(sessionmaker_, stripe) -> None:
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
 
     async with sessionmaker_() as reader:
         assert (await resolve_entitlements(reader, USER)).tier == "free"
 
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
 
 
 async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker_, stripe):
