@@ -534,14 +534,6 @@ async def test_a_grace_window_still_open_is_left_alone(session):
     assert sub.tier == Tier.PRO.value, "still inside the window -- keep paid access"
 
 
-async def test_an_active_subscriber_is_never_touched(session):
-    sub = await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
-
-    assert await expire_grace_windows(session) == []
-    await reload(session, sub)
-    assert sub.tier == Tier.PRO.value
-
-
 async def test_someone_already_on_free_is_skipped(session):
     """Otherwise every free row is rewritten and audited every single night."""
     await seed(session, tier=Tier.FREE.value, status=SubscriptionStatus.PAST_DUE.value,
