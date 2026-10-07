@@ -82,7 +82,8 @@ export interface FakeState {
 export class FakeApi {
   state: FakeState;
   entitlementReads = 0;
-  checkoutCalls = 0;
+  /** What each checkout call asked for: the tier and the billing interval. */
+  checkoutBodies: Record<string, unknown>[] = [];
   portalCalls = 0;
   /** What each portal call asked for -- a tier means a deep link to that plan. */
   portalBodies: Record<string, unknown>[] = [];
@@ -235,9 +236,9 @@ export async function mockApi(page: Page, api: FakeApi) {
   });
 
   await page.route("**/api/v1/billing/checkout", async (route) => {
-    api.checkoutCalls += 1;
-    // A real redirect would leave the app; the test only needs to know the
-    // call was made with the right body.
+    api.checkoutBodies.push(route.request().postDataJSON() ?? {});
+    // A real redirect would leave the app, so this one lands on the success
+    // page instead.
     await route.fulfill({
       json: { checkout_url: "http://localhost:3000/billing/success", session_id: "cs_test_fake" },
     });

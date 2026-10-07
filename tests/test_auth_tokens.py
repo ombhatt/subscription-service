@@ -11,86 +11,15 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import HTTPException
 
 from app import auth
-
-ISSUER = "https://project.supabase.co/auth/v1"
-KID = "test-signing-key"
-
-
-# Supabase signs with whichever the project was created with. New projects
-# default to ES256; the docs describe RS256 as the default, so both are pinned
-# in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would have
-# left the algorithm actually in use uncovered.
-ALGORITHMS = ["RS256", "ES256"]
-
-
-def _keypair(algorithm: str = "RS256"):
-    if algorithm == "ES256":
-        private = ec.generate_private_key(ec.SECP256R1())
-    else:
-        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = private.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
-    return private, private_pem
-
-
-class _StubJWKSClient:
-    """Stands in for PyJWKClient, returning the public half of our keypair."""
-
-    def __init__(self, public_key):
-        self._public_key = public_key
-
-    def get_signing_key_from_jwt(self, token):
-        return type("Key", (), {"key": self._public_key})()
-
-
-@pytest.fixture(params=ALGORITHMS)
-def signer(request, monkeypatch):
-    """A working Supabase-shaped setup: configured URL and a known signing key.
-
-    Parametrised over both signing algorithms, because which one a project uses
-    is decided when the project is created, not by us.
-    """
-    algorithm = request.param
-    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
-
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-    private, private_pem = _keypair(algorithm)
-    auth.set_jwks_client(_StubJWKSClient(private.public_key()))
-
-    def mint(**overrides) -> str:
-        now = datetime.now(UTC)
-        claims = {
-            "sub": "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80",
-            "email": "someone@example.com",
-            "aud": "authenticated",
-            "iss": ISSUER,
-            "role": "authenticated",
-            "iat": now,
-            "exp": now + timedelta(hours=1),
-        }
-        claims.update(overrides)
-        claims = {k: v for k, v in claims.items() if v is not None}
-        return jwt.encode(claims, private_pem, algorithm=algorithm, headers={"kid": KID})
-
-    yield mint
-
-    auth.set_jwks_client(None)
-    get_settings.cache_clear()
+from tests.conftest import TOKEN_ISSUER, TOKEN_KID, TOKEN_SUBJECT, token_keypair
 
 
 def test_a_valid_token_identifies_the_user(signer):
     claims = auth.verify_token(signer())
-    assert claims["sub"] == "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80"
+    assert claims["sub"] == TOKEN_SUBJECT
     assert claims["email"] == "someone@example.com"
 
 
@@ -127,17 +56,17 @@ def test_a_token_without_a_subject_is_refused(signer):
 
 def test_a_token_signed_by_a_different_key_is_refused(signer, request):
     algorithm = request.node.callspec.params["signer"]
-    _, other_pem = _keypair(algorithm)
+    _, other_pem = token_keypair(algorithm)
     forged = jwt.encode(
         {
             "sub": "attacker",
             "aud": "authenticated",
-            "iss": ISSUER,
+            "iss": TOKEN_ISSUER,
             "exp": datetime.now(UTC) + timedelta(hours=1),
         },
         other_pem,
         algorithm=algorithm,
-        headers={"kid": KID},
+        headers={"kid": TOKEN_KID},
     )
     with pytest.raises(HTTPException) as raised:
         auth.verify_token(forged)
@@ -150,7 +79,7 @@ def test_an_unsigned_token_is_refused(signer):
         {
             "sub": "attacker",
             "aud": "authenticated",
-            "iss": ISSUER,
+            "iss": TOKEN_ISSUER,
             "exp": datetime.now(UTC) + timedelta(hours=1),
         },
         key="",
@@ -183,4 +112,4 @@ async def test_a_malformed_authorization_header_is_refused(header):
 async def test_a_lowercase_bearer_scheme_is_accepted(signer):
     """Schemes are case-insensitive per RFC 7235, and real clients vary."""
     user = await auth.get_current_user(authorization=f"bearer {signer()}")
-    assert user.id == "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80"
+    assert user.id == TOKEN_SUBJECT
