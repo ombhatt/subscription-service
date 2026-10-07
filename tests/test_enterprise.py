@@ -13,17 +13,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.models import SalesInquiry
-from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, Tier
 from app.services import quota
 from tests.conftest import TOKEN_SUBJECT, bearer
+from tests.metrics import counted
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
-
-
-def counter(source: str, tier: str) -> float:
-    return sales_inquiries.labels(source=source, current_tier=tier)._value.get()
 
 
 # --------------------------------------------------------------------------
@@ -155,9 +151,9 @@ async def test_a_bad_token_records_an_anonymous_lead_rather_than_401(
 
 
 async def test_the_submission_is_counted(client, session):
-    before = counter("pricing_page", "anonymous")
+    inquiries = counted("sales_inquiries_total", source="pricing_page", current_tier="anonymous")
     await client.post("/v1/billing/contact-sales", json={"email": "a@b.com"})
-    assert counter("pricing_page", "anonymous") == before + 1
+    assert inquiries() == 1
 
 
 async def test_junk_is_rejected_before_it_reaches_the_table(client, session):

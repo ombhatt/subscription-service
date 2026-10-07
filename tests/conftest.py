@@ -59,6 +59,7 @@ from app.cache import InMemoryBackend, set_cache
 from app.db import get_session
 from app.main import app
 from app.models import Base
+from tests.metrics import counted
 
 
 def pytest_configure(config):
@@ -79,14 +80,11 @@ def no_dropped_invalidations(request):
     `commit_and_invalidate` and missed two -- `admin.resync` and `reconcile` --
     and the suite stayed green. This turns that log line into a failure.
     """
-    from app.observability import entitlement_invalidations
-
-    undrained = entitlement_invalidations.labels(outcome="undrained")
-    before = undrained._value.get()
+    undrained = counted("entitlement_invalidations_total", outcome="undrained")
     yield
     if request.node.get_closest_marker("allow_undrained"):
         return
-    dropped = undrained._value.get() - before
+    dropped = undrained()
     assert dropped == 0, (
         f"a plain session.commit() dropped entitlement invalidations {dropped:g} "
         "time(s) in this test -- commit marking writes with commit_and_invalidate()"

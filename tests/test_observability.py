@@ -12,22 +12,12 @@ import re
 
 from prometheus_client import REGISTRY as _DEFAULT_REGISTRY  # noqa: F401  (documents the contrast)
 
-from app.observability import (
-    JsonFormatter,
-    entitlement_cache,
-    event,
-    quota_rejections,
-    request_id_var,
-    webhook_events,
-)
+from app.observability import JsonFormatter, event, request_id_var
 from tests.conftest import deliver, webhook_event
+from tests.metrics import counted
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
-
-
-def counter_value(metric, **labels) -> float:
-    return metric.labels(**labels)._value.get()
 
 
 # --------------------------------------------------------------------------
@@ -149,16 +139,15 @@ async def test_a_handled_webhook_is_counted(client, session, stripe):
     await session.commit()
     stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
-    before = counter_value(webhook_events, event_type="customer.subscription.updated",
-                           outcome="processed")
+    processed = counted(
+        "webhook_events_total", event_type="customer.subscription.updated", outcome="processed"
+    )
 
     await deliver(
         client, webhook_event("evt_m1", "customer.subscription.updated", {"customer": "cus_1"})
     )
 
-    after = counter_value(webhook_events, event_type="customer.subscription.updated",
-                          outcome="processed")
-    assert after == before + 1
+    assert processed() == 1
 
 
 async def test_a_duplicate_is_counted_separately_from_a_grant(client, session, stripe):
@@ -169,31 +158,27 @@ async def test_a_duplicate_is_counted_separately_from_a_grant(client, session, s
     await session.commit()
     stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
 
-    duplicates_before = counter_value(webhook_events, event_type="invoice.paid",
-                                      outcome="duplicate")
-    processed_before = counter_value(webhook_events, event_type="invoice.paid",
-                                     outcome="processed")
+    duplicates = counted("webhook_events_total", event_type="invoice.paid", outcome="duplicate")
+    processed = counted("webhook_events_total", event_type="invoice.paid", outcome="processed")
     payload = webhook_event("evt_m2", "invoice.paid", {"customer": "cus_1"})
     await deliver(client, payload)
     await deliver(client, payload)
 
-    duplicates = counter_value(webhook_events, event_type="invoice.paid", outcome="duplicate")
-    processed = counter_value(webhook_events, event_type="invoice.paid", outcome="processed")
-    assert duplicates == duplicates_before + 1
-    assert processed == processed_before + 1, "only the first delivery is work done"
+    assert duplicates() == 1
+    assert processed() == 1, "only the first delivery is work done"
 
 
 async def test_cache_hits_and_misses_are_distinguished(client, session):
     from app.services.entitlements import resolve_entitlements
 
-    miss_before = counter_value(entitlement_cache, result="miss")
-    hit_before = counter_value(entitlement_cache, result="hit")
+    misses = counted("entitlement_cache_total", result="miss")
+    hits = counted("entitlement_cache_total", result="hit")
 
     await resolve_entitlements(session, "cache-metrics-user")   # miss
     await resolve_entitlements(session, "cache-metrics-user")   # hit
 
-    assert counter_value(entitlement_cache, result="miss") == miss_before + 1
-    assert counter_value(entitlement_cache, result="hit") == hit_before + 1
+    assert misses() == 1
+    assert hits() == 1
 
 
 async def test_a_quota_rejection_is_counted(client, session):
@@ -204,7 +189,7 @@ async def test_a_quota_rejection_is_counted(client, session):
     ents = await resolve_entitlements(session, "quota-metrics-user")
     limit = ents.quota("messages_per_day").limit
 
-    before = counter_value(quota_rejections, quota="messages_per_day", tier="free")
+    rejected = counted("quota_rejections_total", quota="messages_per_day", tier="free")
     for _ in range(limit):
         await quota.consume(session, user_id="quota-metrics-user",
                             key="messages_per_day", entitlements=ents)
@@ -214,5 +199,4 @@ async def test_a_quota_rejection_is_counted(client, session):
     except QuotaExceeded:
         pass
 
-    after = counter_value(quota_rejections, quota="messages_per_day", tier="free")
-    assert after == before + 1
+    assert rejected() == 1

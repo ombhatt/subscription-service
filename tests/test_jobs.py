@@ -593,7 +593,7 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     session, stripe, monkeypatch, caplog
 ):
     from app.jobs import reconcile as job
-    from app.observability import reconciliation_drift
+    from app.observability import REGISTRY
 
     await seed(session, tier=Tier.FREE.value)
     stripe.set_subscription("cus_1", user_id="u1", status="active", price_id="price_pro_m")
@@ -617,7 +617,9 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     assert fields["repaired"] == 2, "the drifted row and the unknown customer were both synced"
     assert fields["failed"] == 0
 
-    assert reconciliation_drift._value.get() == 1, "the gauge must carry the drift count"
+    assert REGISTRY.get_sample_value("reconciliation_drift") == 1, (
+        "the gauge must carry the drift count"
+    )
 
 
 async def test_reconcile_main_fails_the_process_when_a_repair_failed(

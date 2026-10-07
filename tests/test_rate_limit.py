@@ -11,18 +11,10 @@ import pytest
 
 from app.cache import set_cache
 from app.config import get_settings
-from app.observability import rate_limit_errors, rate_limit_rejections
 from app.ratelimit import Window
+from tests.metrics import counted
 
 LEAD = {"email": "cto@acme.com"}
-
-
-def rejections(window: str) -> float:
-    return rate_limit_rejections.labels(scope="contact_sales", window=window)._value.get()
-
-
-def errors() -> float:
-    return rate_limit_errors.labels(scope="contact_sales")._value.get()
 
 
 @pytest.fixture
@@ -63,7 +55,7 @@ async def test_requests_under_the_limit_are_accepted(client, windows, clock):
 
 async def test_the_request_over_the_limit_is_refused_with_retry_after(client, windows, clock):
     clock[0] += 15  # a quarter into a minute window that started on the boundary
-    before = rejections("minute")
+    rejected = counted("rate_limit_rejections_total", scope="contact_sales", window="minute")
     for _ in range(3):
         await post(client)
 
@@ -76,7 +68,7 @@ async def test_the_request_over_the_limit_is_refused_with_retry_after(client, wi
     assert blocked.headers["Retry-After"] == "45"
     # The frontend shows `detail`; a blocked visitor should read a sentence.
     assert "try again" in body["detail"].lower()
-    assert rejections("minute") == before + 1
+    assert rejected() == 1
 
 
 async def test_nothing_is_written_for_a_refused_request(client, session, windows, clock):
@@ -148,12 +140,12 @@ async def test_a_cache_failure_allows_the_request_and_is_counted(client, windows
             raise ConnectionError("redis is gone")
 
     set_cache(Broken())
-    before = errors()
+    errors = counted("rate_limit_errors_total", scope="contact_sales")
 
     for _ in range(5):
         assert (await post(client)).status_code == 201
 
-    assert errors() == before + 5
+    assert errors() == 5
 
 
 async def test_a_window_set_to_zero_is_disabled(client, clock, monkeypatch):
