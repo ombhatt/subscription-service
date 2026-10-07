@@ -70,6 +70,7 @@ LEGACY = {
 def test_an_expanded_discount_is_flattened():
     d = subscription_discount(EXPANDED)
     assert d["coupon_id"] == "DzxbTbdd"
+    assert d["name"] == "Launch 25"
     assert d["percent_off"] == 25.0
     assert d["duration"] == "repeating"
     assert d["duration_in_months"] == 3
@@ -86,6 +87,7 @@ def test_an_unexpanded_discount_is_ignored_rather_than_guessed():
 def test_the_legacy_singular_shape_still_reads():
     d = subscription_discount(LEGACY)
     assert d["coupon_id"] == "OLDCOUPON"
+    assert d["name"] == "Legacy 10"
     assert d["percent_off"] == 10.0
     assert d["duration"] == "forever"
     assert d["ends_at"] == 1796415914

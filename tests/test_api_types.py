@@ -8,10 +8,13 @@ pieces of it agree with plans.py.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
-from app.models import SubscriptionStatus
+from app.config import get_settings
+from app.models import Subscription, SubscriptionStatus
 from app.plans import CATALOG, Tier
 from app.schemas import Features
 from app.services.entitlements import Entitlements, _resolve_from_db
@@ -40,8 +43,31 @@ def test_every_typed_feature_is_one_some_tier_has():
 async def test_entitlements_survive_the_cache_round_trip(session):
     """They become JSON only at the cache. Whatever goes in must come back
     equal, dates and enums included, or a hit answers differently from a miss."""
-    resolved = await _resolve_from_db(session, "nobody")
-    assert Entitlements.model_validate(resolved.model_dump(mode="json")) == resolved
+    session.add(
+        Subscription(
+            user_id="dated",
+            tier="pro",
+            status="past_due",
+            current_period_start=datetime(2026, 9, 1, tzinfo=UTC),
+            current_period_end=datetime(2026, 10, 1, tzinfo=UTC),
+            past_due_since=datetime(2026, 9, 30, 12, tzinfo=UTC),
+        )
+    )
+    await session.commit()
+    resolved = await _resolve_from_db(session, "dated")
+
+    round_tripped = Entitlements.model_validate(resolved.model_dump(mode="json"))
+
+    assert round_tripped == resolved
+    assert (
+        round_tripped.current_period_start,
+        round_tripped.current_period_end,
+        round_tripped.grace_ends_at,
+    ) == (
+        datetime(2026, 9, 1, tzinfo=UTC),
+        datetime(2026, 10, 1, tzinfo=UTC),
+        datetime(2026, 9, 30, 12, tzinfo=UTC) + timedelta(days=get_settings().dunning_grace_days),
+    )
 
 
 def test_entitlements_cannot_be_edited_after_resolution():
