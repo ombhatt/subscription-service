@@ -25,10 +25,19 @@ test("the annual toggle swaps the amounts", async ({ page }) => {
   await expect(plus).toContainText("$200/yr");
 });
 
-test("a free user can start checkout", async ({ page, api }) => {
+test("a free user checks out the plan on the card, monthly by default", async ({ page, api }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Upgrade to Pro" }).click();
-  await expect.poll(() => api.checkoutCalls).toBe(1);
+  await page.locator(".plan", { hasText: "Pro" }).getByRole("button", { name: "Upgrade to Pro" }).click();
+
+  await expect.poll(() => api.checkoutBodies).toEqual([{ tier: "pro", interval: "monthly" }]);
+});
+
+test("the annual toggle travels to checkout", async ({ page, api }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Annual" }).click();
+  await page.locator(".plan", { hasText: "Plus" }).getByRole("button", { name: "Upgrade to Plus" }).click();
+
+  await expect.poll(() => api.checkoutBodies).toEqual([{ tier: "plus", interval: "annual" }]);
 });
 
 test("a subscriber is sent to the portal, never to a second checkout", async ({ page }) => {
@@ -47,7 +56,7 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
 
   await pro.getByRole("button", { name: "Upgrade to Pro" }).click();
   await expect.poll(() => api.portalCalls).toBe(1);
-  expect(api.checkoutCalls).toBe(0);
+  expect(api.checkoutBodies).toEqual([]);
   // The tier travels with the click, so Stripe opens on a confirmation for Pro
   // rather than on a list the customer has to search.
   expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "monthly" });
