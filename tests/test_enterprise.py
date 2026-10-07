@@ -14,6 +14,7 @@ from app.models import SalesInquiry
 from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, Tier
 from app.services import quota
+from tests.conftest import TOKEN_SUBJECT
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
@@ -114,31 +115,38 @@ async def test_an_anonymous_visitor_can_ask_to_be_contacted(client, session):
     assert row.handled_at is None
 
 
-async def test_a_signed_in_lead_is_attributed_with_their_tier(client, session):
+async def test_a_signed_in_lead_is_attributed_with_their_tier(real_auth_client, signer, session):
     """A Pro subscriber asking about Enterprise is a different conversation
     from a stranger browsing plans."""
-    response = await client.post(
-        "/v1/billing/contact-sales", headers=USER,
+    response = await real_auth_client.post(
+        "/v1/billing/contact-sales",
+        headers={"Authorization": f"Bearer {signer()}"},
         json={"email": "alice@acme.com", "source": "paywall"},
     )
     assert response.status_code == 201
 
     row = (await session.execute(select(SalesInquiry))).scalars().one()
-    assert row.user_id == "alice"
+    assert row.user_id == TOKEN_SUBJECT
     assert row.current_tier == "free", "whatever they are on today"
     assert row.source == "paywall"
 
 
-async def test_a_bad_token_records_an_anonymous_lead_rather_than_401(client, session):
+async def test_a_bad_token_records_an_anonymous_lead_rather_than_401(
+    real_auth_client, signer, session
+):
     """Losing attribution is the right failure here; losing the lead is not."""
-    response = await client.post(
+    forged = signer(iss="https://attacker.supabase.co/auth/v1")
+    response = await real_auth_client.post(
         "/v1/billing/contact-sales",
-        headers={"Authorization": "Bearer not-a-real-token"},
+        headers={"Authorization": f"Bearer {forged}"},
         json={"email": "someone@acme.com"},
     )
     assert response.status_code == 201
+
     row = (await session.execute(select(SalesInquiry))).scalars().one()
+    assert row.email == "someone@acme.com"
     assert row.user_id is None
+    assert row.current_tier is None
 
 
 async def test_the_submission_is_counted(client, session):
