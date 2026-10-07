@@ -18,9 +18,12 @@ def test_a_generated_name_is_recognised_once_it_is_old_enough():
     assert stale([old, fresh], now=NOW, older_than_minutes=60) == [old]
 
 
-def test_a_running_job_is_left_alone():
-    running = new_schema_name(now=NOW - 59 * 60)
-    assert stale([running], now=NOW, older_than_minutes=60) == []
+def test_a_schema_is_stale_only_once_strictly_older_than_the_cutoff():
+    exactly_an_hour = new_schema_name(now=NOW - 60 * 60)
+    a_second_more = new_schema_name(now=NOW - 60 * 60 - 1)
+    assert stale([exactly_an_hour, a_second_more], now=NOW, older_than_minutes=60) == [
+        a_second_more
+    ]
 
 
 def test_nothing_that_is_not_a_generated_name_is_ever_a_candidate():

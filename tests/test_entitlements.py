@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.config import get_settings
 from app.models import EntitlementGrant, Subscription
 from app.services.entitlements import invalidate_entitlements, resolve_entitlements
 
@@ -35,31 +36,26 @@ async def test_incomplete_checkout_grants_nothing(session):
     assert ents.tier == "free"
 
 
-async def test_past_due_keeps_access_inside_grace(session):
-    await make_sub(
-        session,
-        "u3",
-        tier="plus",
-        status="past_due",
-        past_due_since=datetime.now(UTC) - timedelta(days=2),
-    )
+def grace() -> timedelta:
+    return timedelta(days=get_settings().dunning_grace_days)
+
+
+async def test_past_due_keeps_access_until_the_last_hour_of_grace(session):
+    past_due_since = datetime.now(UTC).replace(microsecond=0) - grace() + timedelta(hours=1)
+    await make_sub(session, "u3", tier="plus", status="past_due", past_due_since=past_due_since)
     ents = await resolve_entitlements(session, "u3")
     assert ents.tier == "plus"
-    assert ents.grace_ends_at is not None
+    assert ents.grace_ends_at == past_due_since + grace()
 
 
-async def test_past_due_loses_access_after_grace(session):
+async def test_past_due_loses_access_an_hour_after_grace(session):
     # Beyond the window, the read path revokes even if the nightly job has not
     # run yet.
-    await make_sub(
-        session,
-        "u4",
-        tier="plus",
-        status="past_due",
-        past_due_since=datetime.now(UTC) - timedelta(days=30),
-    )
+    past_due_since = datetime.now(UTC).replace(microsecond=0) - grace() - timedelta(hours=1)
+    await make_sub(session, "u4", tier="plus", status="past_due", past_due_since=past_due_since)
     ents = await resolve_entitlements(session, "u4")
     assert ents.tier == "free"
+    assert ents.grace_ends_at == past_due_since + grace()
 
 
 async def test_grant_lifts_a_free_user(session):

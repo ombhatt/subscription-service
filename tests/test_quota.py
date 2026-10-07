@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import func, select
 
@@ -17,6 +19,10 @@ async def entitlements_for(
         session.add(Subscription(user_id=user_id, tier=tier, status=status))
         await session.commit()
     return await resolve_entitlements(session, user_id)
+
+
+def utc(*args: int) -> datetime:
+    return datetime(*args, tzinfo=UTC)
 
 
 async def test_free_tier_is_capped(session):
@@ -63,17 +69,17 @@ async def test_counters_are_per_user(session):
     assert state["used"] == 0
 
 
-async def test_daily_window_starts_at_utc_midnight(session):
+async def test_daily_window_is_the_utc_day_containing_now(session):
     ents = await entitlements_for(session, "q6", "free")
-    start, end = quota.window_for(QuotaWindow.DAILY, ents)
-    assert (start.hour, start.minute, start.second) == (0, 0, 0)
-    assert (end - start).days == 1
+    now = utc(2026, 3, 14, 23, 59, 59)
+    assert quota.window_for(QuotaWindow.DAILY, ents, now=now) == (
+        utc(2026, 3, 14),
+        utc(2026, 3, 15),
+    )
 
 
 async def test_billing_window_follows_the_subscribers_own_period(session):
     """A monthly cap must reset on the renewal date, not on the 1st."""
-    from datetime import UTC, datetime, timedelta
-
     now = datetime.now(UTC)
     period_start = now - timedelta(days=10)
     period_end = now + timedelta(days=20)
@@ -85,13 +91,25 @@ async def test_billing_window_follows_the_subscribers_own_period(session):
     assert end == period_end
 
 
-async def test_free_users_fall_back_to_the_calendar_month(session):
+@pytest.mark.parametrize(
+    ("now", "month_start", "next_month_start"),
+    [
+        (utc(2026, 1, 15, 12), utc(2026, 1, 1), utc(2026, 2, 1)),
+        (utc(2026, 1, 31, 23, 59, 59), utc(2026, 1, 1), utc(2026, 2, 1)),
+        (utc(2026, 2, 1), utc(2026, 2, 1), utc(2026, 3, 1)),
+        (utc(2026, 12, 20), utc(2026, 12, 1), utc(2027, 1, 1)),
+    ],
+    ids=["mid-month", "last-second-of-month", "first-instant-of-month", "december"],
+)
+async def test_free_users_fall_back_to_the_calendar_month(
+    session, now, month_start, next_month_start
+):
     ents = await entitlements_for(session, "q6c", "free")
     assert ents.current_period_start is None
-    start, end = quota.window_for(QuotaWindow.BILLING_PERIOD, ents)
-    assert start.day == 1
-    assert end.day == 1
-    assert end > start
+    assert quota.window_for(QuotaWindow.BILLING_PERIOD, ents, now=now) == (
+        month_start,
+        next_month_start,
+    )
 
 
 # --------------------------------------------------------------------------
