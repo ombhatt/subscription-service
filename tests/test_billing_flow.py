@@ -12,6 +12,17 @@ USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
 ADMIN = {"X-Admin-Key": "test-admin-key", "X-Admin-Actor": "support@example.com"}
 
 
+async def subscribe(client, stripe, tier: str, status: str) -> str:
+    """Check out `tier` monthly, then give that customer a Stripe subscription
+    in `status`. No webhook: the local row learns of it only if a test says so."""
+    await client.post(
+        "/v1/billing/checkout", json={"tier": tier, "interval": "monthly"}, headers=USER
+    )
+    customer = stripe.checkout_sessions[0]["customer_id"]
+    stripe.set_subscription(customer, status=status, price_id=f"price_{tier}_m")
+    return customer
+
+
 async def test_new_user_is_free_without_any_setup(client, stripe):
     response = await client.get("/v1/entitlements", headers=USER)
     assert response.status_code == 200
@@ -100,11 +111,7 @@ async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):
     """The local row alone refuses. Stripe has already ended the subscription
     here and that webhook has not landed, so asking Stripe would allow the
     checkout: only the row can say no."""
-    await client.post(
-        "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
-    )
-    customer = stripe.checkout_sessions[0]["customer_id"]
-    stripe.set_subscription(customer, status="active", price_id="price_pro_m")
+    customer = await subscribe(client, stripe, "pro", "active")
     await deliver(
         client, webhook_event("evt_s1", "customer.subscription.created", {"customer": customer})
     )
@@ -124,11 +131,7 @@ async def test_a_second_checkout_is_refused_before_the_webhook_lands(client, str
     processed. A customer who has paid but whose webhook is late still reads as
     Free, so the pricing page offers them checkout again -- and a second
     checkout is a second subscription, both billing, only one visible here."""
-    await client.post(
-        "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
-    )
-    customer = stripe.checkout_sessions[0]["customer_id"]
-    stripe.set_subscription(customer, status=stripe_status, price_id="price_plus_m")
+    await subscribe(client, stripe, "plus", stripe_status)
     # No webhook: this is the window between paying and being told.
 
     again = await client.post(
@@ -140,11 +143,7 @@ async def test_a_second_checkout_is_refused_before_the_webhook_lands(client, str
 
 
 async def test_checkout_is_allowed_again_once_the_stripe_subscription_has_ended(client, stripe):
-    await client.post(
-        "/v1/billing/checkout", json={"tier": "plus", "interval": "monthly"}, headers=USER
-    )
-    customer = stripe.checkout_sessions[0]["customer_id"]
-    stripe.set_subscription(customer, status="canceled", price_id="price_plus_m")
+    await subscribe(client, stripe, "plus", "canceled")
 
     again = await client.post(
         "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
@@ -154,11 +153,7 @@ async def test_checkout_is_allowed_again_once_the_stripe_subscription_has_ended(
 
 
 async def test_cancellation_returns_the_user_to_free(client, stripe):
-    await client.post(
-        "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
-    )
-    customer = stripe.checkout_sessions[0]["customer_id"]
-    stripe.set_subscription(customer, status="active", price_id="price_pro_m")
+    customer = await subscribe(client, stripe, "pro", "active")
     await deliver(
         client, webhook_event("evt_c1", "customer.subscription.created", {"customer": customer})
     )
