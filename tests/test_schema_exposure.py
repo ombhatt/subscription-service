@@ -61,11 +61,13 @@ def test_alembics_own_bookkeeping_is_locked_too():
 
 def test_the_lockdown_is_a_no_op_off_postgres():
     """The suite runs on SQLite, which has neither RLS nor these roles."""
-    spec = importlib.util.spec_from_file_location("lockdown_0004b", MIGRATION)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    assert hasattr(module, "_is_postgres"), "the dialect guard must exist"
+    recorder = _RecordingOp()
+    recorder.name = "sqlite"
+    module = _load(MIGRATION)
+    module.op = recorder
+    module.upgrade()
+    module.downgrade()
+    assert recorder.sql == [], f"issued Postgres-only SQL on SQLite: {recorder.sql}"
 
 
 # --------------------------------------------------------------------------
