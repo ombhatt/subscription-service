@@ -16,11 +16,13 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.jobs.expire_grace import REASON, expire_grace_windows
 from app.models import SubscriptionAudit, SubscriptionStatus
 from app.policy import grace_ends_at, grace_expired
 from app.services.entitlements import commit_and_invalidate, resolve_entitlements
 from app.services.subscriptions import get_subscription, sync_subscription_from_stripe
+from app.timeutil import as_utc
 
 
 def a_user(prefix: str) -> str:
@@ -92,15 +94,20 @@ async def test_a_failed_renewal_opens_the_grace_window(session, clock, prices):
     clock.set_payment_method(customer["id"], "pm_card_chargeCustomerFail")
     clock.advance_past_renewal(subscription["id"])
 
+    before = datetime.now(UTC)
     failed = await sync(session, customer["id"])
+    after = datetime.now(UTC)
     assert failed.status == SubscriptionStatus.PAST_DUE.value
-    assert failed.past_due_since is not None
+    assert before <= as_utc(failed.past_due_since) <= after, (
+        "the window opens on our wall clock, not the test clock's simulated time"
+    )
     assert failed.tier == "pro", "grace keeps paid access while the card is retried"
-    assert grace_ends_at(failed) is not None
+    window = timedelta(days=get_settings().dunning_grace_days)
+    assert grace_ends_at(failed) == as_utc(failed.past_due_since) + window
 
     ents = await resolve_entitlements(session, user_id)
     assert ents.tier == "pro"
-    assert ents.grace_ends_at is not None
+    assert ents.grace_ends_at == grace_ends_at(failed)
 
 
 async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, prices):
