@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 
+import jwt
 import pytest
 import pytest_asyncio
 
@@ -43,12 +45,14 @@ os.environ.update(
     }
 )
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import Header, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app import stripe_client
+from app import auth, stripe_client
 from app.auth import CurrentUser, get_current_user, get_current_user_optional
 from app.billing_provider import PROVIDER_FUNCTIONS, SubscriptionPage
 from app.cache import InMemoryBackend, set_cache
@@ -161,6 +165,94 @@ async def client(sessionmaker_):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def real_auth_client(client, signer):
+    """`client`, but identity comes from the app's own token verification.
+
+    Tests that are about authentication itself need the real dependency to run;
+    the header stub would only test the stub. Send `Authorization: Bearer
+    {signer()}` to be someone.
+    """
+    del app.dependency_overrides[get_current_user]
+    del app.dependency_overrides[get_current_user_optional]
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Supabase tokens, against a keypair this suite generates
+# ---------------------------------------------------------------------------
+
+TOKEN_ISSUER = "https://project.supabase.co/auth/v1"
+TOKEN_KID = "test-signing-key"
+TOKEN_SUBJECT = "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80"
+
+# Supabase signs with whichever the project was created with. New projects
+# default to ES256; the docs describe RS256 as the default, so both are pinned
+# in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would have
+# left the algorithm actually in use uncovered.
+TOKEN_ALGORITHMS = ["RS256", "ES256"]
+
+
+def token_keypair(algorithm: str = "RS256"):
+    if algorithm == "ES256":
+        private = ec.generate_private_key(ec.SECP256R1())
+    else:
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    return private, private_pem
+
+
+class _StubJWKSClient:
+    """Stands in for PyJWKClient, returning the public half of our keypair."""
+
+    def __init__(self, public_key):
+        self._public_key = public_key
+
+    def get_signing_key_from_jwt(self, token):
+        return type("Key", (), {"key": self._public_key})()
+
+
+@pytest.fixture(params=TOKEN_ALGORITHMS)
+def signer(request, monkeypatch):
+    """A working Supabase-shaped setup: configured URL and a known signing key.
+
+    Parametrised over both signing algorithms, because which one a project uses
+    is decided when the project is created, not by us.
+    """
+    algorithm = request.param
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    private, private_pem = token_keypair(algorithm)
+    auth.set_jwks_client(_StubJWKSClient(private.public_key()))
+
+    def mint(**overrides) -> str:
+        now = datetime.now(UTC)
+        claims = {
+            "sub": TOKEN_SUBJECT,
+            "email": "someone@example.com",
+            "aud": "authenticated",
+            "iss": TOKEN_ISSUER,
+            "role": "authenticated",
+            "iat": now,
+            "exp": now + timedelta(hours=1),
+        }
+        claims.update(overrides)
+        claims = {k: v for k, v in claims.items() if v is not None}
+        return jwt.encode(claims, private_pem, algorithm=algorithm, headers={"kid": TOKEN_KID})
+
+    yield mint
+
+    auth.set_jwks_client(None)
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
