@@ -62,6 +62,7 @@ async def test_requests_under_the_limit_are_accepted(client, windows, clock):
 
 
 async def test_the_request_over_the_limit_is_refused_with_retry_after(client, windows, clock):
+    clock[0] += 15  # a quarter into a minute window that started on the boundary
     before = rejections("minute")
     for _ in range(3):
         await post(client)
@@ -71,8 +72,8 @@ async def test_the_request_over_the_limit_is_refused_with_retry_after(client, wi
     assert blocked.status_code == 429
     body = blocked.json()
     assert body["error"] == "rate_limited"
-    assert body["retry_after"] > 0
-    assert blocked.headers["Retry-After"] == str(body["retry_after"])
+    assert body["retry_after"] == 45, "the seconds left until the window rolls over"
+    assert blocked.headers["Retry-After"] == "45"
     # The frontend shows `detail`; a blocked visitor should read a sentence.
     assert "try again" in body["detail"].lower()
     assert rejections("minute") == before + 1
