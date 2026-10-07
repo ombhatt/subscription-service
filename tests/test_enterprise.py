@@ -16,7 +16,7 @@ from app.models import SalesInquiry
 from app.observability import sales_inquiries
 from app.plans import CATALOG, TIER_RANK, Tier
 from app.services import quota
-from tests.conftest import TOKEN_SUBJECT
+from tests.conftest import TOKEN_SUBJECT, bearer
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
@@ -125,7 +125,7 @@ async def test_a_signed_in_lead_is_attributed_with_their_tier(real_auth_client, 
     from a stranger browsing plans."""
     response = await real_auth_client.post(
         "/v1/billing/contact-sales",
-        headers={"Authorization": f"Bearer {signer()}"},
+        headers=bearer(signer()),
         json={"email": "alice@acme.com", "source": "paywall"},
     )
     assert response.status_code == 201
@@ -143,7 +143,7 @@ async def test_a_bad_token_records_an_anonymous_lead_rather_than_401(
     forged = signer(iss="https://attacker.supabase.co/auth/v1")
     response = await real_auth_client.post(
         "/v1/billing/contact-sales",
-        headers={"Authorization": f"Bearer {forged}"},
+        headers=bearer(forged),
         json={"email": "someone@acme.com"},
     )
     assert response.status_code == 201

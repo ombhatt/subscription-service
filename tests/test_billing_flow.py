@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TOKEN_SUBJECT, deliver, webhook_event
+from tests.conftest import TOKEN_SUBJECT, bearer, deliver, webhook_event
 
 USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
 ADMIN = {"X-Admin-Key": "test-admin-key", "X-Admin-Actor": "support@example.com"}
@@ -29,11 +29,9 @@ async def test_a_token_is_served_as_the_user_it_names(real_auth_client, signer):
     )
     assert grant.status_code == 200
 
-    granted = await real_auth_client.get(
-        "/v1/entitlements", headers={"Authorization": f"Bearer {signer()}"}
-    )
+    granted = await real_auth_client.get("/v1/entitlements", headers=bearer(signer()))
     other = await real_auth_client.get(
-        "/v1/entitlements", headers={"Authorization": f"Bearer {signer(sub='someone-else')}"}
+        "/v1/entitlements", headers=bearer(signer(sub="someone-else"))
     )
 
     assert granted.status_code == 200
@@ -45,9 +43,7 @@ async def test_a_token_from_another_supabase_project_is_refused(real_auth_client
     """Any Supabase project signs valid JWTs, so a stranger can mint one naming
     any user id they like."""
     forged = signer(iss="https://attacker.supabase.co/auth/v1")
-    response = await real_auth_client.get(
-        "/v1/entitlements", headers={"Authorization": f"Bearer {forged}"}
-    )
+    response = await real_auth_client.get("/v1/entitlements", headers=bearer(forged))
     assert response.status_code == 401
 
 

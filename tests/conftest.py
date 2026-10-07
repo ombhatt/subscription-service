@@ -172,8 +172,8 @@ async def real_auth_client(client, signer):
     """`client`, but identity comes from the app's own token verification.
 
     Tests that are about authentication itself need the real dependency to run;
-    the header stub would only test the stub. Send `Authorization: Bearer
-    {signer()}` to be someone.
+    the header stub would only test the stub. Send `headers=bearer(signer())`
+    to be someone.
     """
     del app.dependency_overrides[get_current_user]
     del app.dependency_overrides[get_current_user_optional]
@@ -253,6 +253,10 @@ def signer(request, monkeypatch):
 
     auth.set_jwks_client(None)
     get_settings.cache_clear()
+
+
+def bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ---------------------------------------------------------------------------
