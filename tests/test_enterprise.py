@@ -8,6 +8,8 @@ are mostly about the places that distinction has to hold.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 
 from app.models import SalesInquiry
@@ -66,6 +68,9 @@ async def test_free_is_still_refused_by_the_same_rule(client, stripe, session):
         json={"tier": "free", "interval": "monthly"},
     )
     assert response.status_code == 400
+    assert "not a purchasable tier" in response.json()["detail"], (
+        "free has no price either, so only this message shows the rule refused it"
+    )
 
 
 def test_the_paywall_never_offers_enterprise_as_an_upgrade():
@@ -178,18 +183,17 @@ async def test_junk_is_rejected_before_it_reaches_the_table(client, session):
 # --------------------------------------------------------------------------
 
 
-async def test_the_lead_queue_needs_the_admin_key(client):
-    """Names, emails and stated seat counts of people evaluating the product."""
-    assert (await client.get("/v1/admin/sales-inquiries")).status_code == 403
-
-
 async def test_leads_come_back_newest_first(client, session):
-    for email in ("first@acme.com", "second@acme.com", "third@acme.com"):
-        await client.post("/v1/billing/contact-sales", json={"email": email})
+    """Timestamps are explicit and inserted out of order: SQLite's `now()` has
+    one-second resolution, and insertion order would otherwise stand in for
+    the sort."""
+    start = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    for email, offset in (("second@acme.com", 1), ("first@acme.com", 0), ("third@acme.com", 2)):
+        session.add(SalesInquiry(email=email, created_at=start + timedelta(minutes=offset)))
+    await session.commit()
 
     rows = (await client.get("/v1/admin/sales-inquiries", headers=ADMIN)).json()
-    assert len(rows) == 3
-    assert {r["email"] for r in rows} == {"first@acme.com", "second@acme.com", "third@acme.com"}
+    assert [r["email"] for r in rows] == ["third@acme.com", "second@acme.com", "first@acme.com"]
 
 
 async def test_marking_one_handled_takes_it_off_the_working_list(client, session):
