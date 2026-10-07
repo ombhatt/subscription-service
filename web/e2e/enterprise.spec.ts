@@ -13,7 +13,6 @@ import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
 
 test.describe("the Enterprise card", () => {
   test.beforeEach(async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
   });
 
@@ -27,8 +26,8 @@ test.describe("the Enterprise card", () => {
 
   test("does not render unlimited context as zero", async ({ page }) => {
     const card = page.locator(".card.plan").filter({ hasText: "Enterprise" });
-    await expect(card).toContainText("Unlimited");
-    await expect(card).not.toContainText("0 context");
+    const context = card.locator("li").filter({ has: page.getByText("context", { exact: true }) });
+    await expect(context.locator("span").last()).toHaveText("Unlimited");
   });
 
   test("offers a conversation instead of a checkout", async ({ page }) => {
@@ -46,9 +45,6 @@ test.describe("the Enterprise card", () => {
 test.describe("contacting sales", () => {
   test("an anonymous visitor can submit without signing up", async ({ page }) => {
     // The whole reason the endpoint is public: this person has no account yet.
-    const api = new FakeApi();
-    await mockApi(page, api);
-
     let sent: Record<string, unknown> | null = null;
     await page.route("**/api/v1/billing/contact-sales", async (route) => {
       sent = route.request().postDataJSON();
@@ -76,7 +72,6 @@ test.describe("contacting sales", () => {
 
   test("optional fields are genuinely optional", async ({ page }) => {
     let sent: Record<string, unknown> | null = null;
-    await mockApi(page, new FakeApi());
     await page.route("**/api/v1/billing/contact-sales", async (route) => {
       sent = route.request().postDataJSON();
       await route.fulfill({ status: 201, json: { id: "inq_2", status: "received" } });
@@ -92,7 +87,6 @@ test.describe("contacting sales", () => {
   });
 
   test("submit is unavailable until there is an address to reply to", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await page.getByRole("button", { name: "Contact sales" }).click();
     await expect(page.getByRole("button", { name: "Send request" })).toBeDisabled();
@@ -119,7 +113,6 @@ test.describe("contacting sales", () => {
   });
 
   test("a failure is announced, not swallowed", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.route("**/api/v1/billing/contact-sales", (route) =>
       route.fulfill({ status: 500, json: { detail: "database is on fire" } }),
     );
@@ -136,7 +129,6 @@ test.describe("contacting sales", () => {
   });
 
   test("the form has no accessibility violations", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await page.getByRole("button", { name: "Contact sales" }).click();
     await expect(page.getByLabel("Work email")).toBeVisible();
@@ -150,8 +142,6 @@ test.describe("contacting sales", () => {
 
 test.describe("the contact form is a dialog", () => {
   test("it opens over the plans instead of pushing them down", async ({ page }) => {
-    const api = new FakeApi();
-    await mockApi(page, api);
     await page.goto("/");
 
     const plans = page.locator(".card.plan");
@@ -170,7 +160,6 @@ test.describe("the contact form is a dialog", () => {
   });
 
   test("Escape closes it", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await page.getByRole("button", { name: "Contact sales" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -178,10 +167,13 @@ test.describe("the contact form is a dialog", () => {
     await page.keyboard.press("Escape");
 
     await expect(page.getByRole("dialog")).toBeHidden();
+    // The browser closes a native dialog on Escape by itself. Only reopening it
+    // shows that the page's own open state was reset too.
+    await page.getByRole("button", { name: "Contact sales" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
   });
 
   test("so does the close button", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await page.getByRole("button", { name: "Contact sales" }).click();
 

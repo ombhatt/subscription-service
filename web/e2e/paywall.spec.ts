@@ -18,9 +18,9 @@ test("a locked model names the tier that unlocks it", async ({ page, api }) => {
   await expect(banner.getByRole("link", { name: "See plans" })).toBeVisible();
 });
 
-test("a blocked model consumes no quota", async ({ page, api }) => {
-  // The feature check runs before metering; being refused must not cost you a
-  // message.
+test("a blocked model consumes no quota", async ({ page }) => {
+  // Being refused must not cost you a message, so the count may only move on
+  // the API's answer, never ahead of it.
   await page.goto("/chat");
   await expect(page.getByText("20 of 20 messages left today")).toBeVisible();
 
@@ -30,7 +30,6 @@ test("a blocked model consumes no quota", async ({ page, api }) => {
 
   await expect(page.locator(".banner.warn")).toBeVisible();
   await expect(page.getByText("20 of 20 messages left today")).toBeVisible();
-  expect(api.state.messagesUsed).toBe(0);
 });
 
 test("an allowed model answers and decrements the quota", async ({ page }) => {

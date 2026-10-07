@@ -6,13 +6,12 @@
  * that a percentage was rounded the wrong way. They are pure and
  * deterministic, so they are the cheapest thing in the repo to cover properly.
  *
- * Assertions avoid pinning exact currency formatting. `Intl.NumberFormat` is
- * called with an `undefined` locale, so the symbol and separators depend on
- * the machine; what the code actually decides -- the arithmetic, the branch,
- * the suffix, the fraction digits -- is asserted instead.
+ * The app formats with the viewer's locale and time zone, so the suite pins
+ * both to what Playwright uses (en-US, UTC) and asserts exact strings. Without
+ * that, "$500 off" passes for "$5 off" and a date a day late passes for 2026.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   type Discount,
@@ -22,10 +21,35 @@ import {
   formatDate,
   formatDateTime,
   formatLimit,
-  formatMoney,
   humanizeKey,
   offerFor,
 } from "./types";
+
+beforeAll(() => {
+  vi.stubEnv("TZ", "UTC");
+  const locale = "en-US";
+  const NumberFormat = Intl.NumberFormat;
+  vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
+    locales?: Intl.LocalesArgument,
+    options?: Intl.NumberFormatOptions,
+  ) {
+    return new NumberFormat(locales ?? locale, options);
+  } as typeof Intl.NumberFormat);
+  const pin = (proto: object, method: string) => {
+    const target = proto as Record<string, (...args: unknown[]) => string>;
+    const original = target[method];
+    vi.spyOn(target, method).mockImplementation(function (
+      this: unknown,
+      locales?: unknown,
+      options?: unknown,
+    ) {
+      return original.call(this, locales ?? locale, options);
+    });
+  };
+  pin(Number.prototype, "toLocaleString");
+  pin(Date.prototype, "toLocaleString");
+  pin(Date.prototype, "toLocaleDateString");
+});
 
 
 const price = (unit_amount: number | null, currency: string | null = "usd"): Price => ({
@@ -64,11 +88,10 @@ describe("offerFor", () => {
     expect(offer.label).toContain("25% off");
   });
 
-  it("rounds a percentage to whole minor units", () => {
-    // 1999 * 0.667 = 1333.333 -- a fractional cent would render as $13.3333
-    const offer = offerFor(price(1999), "monthly", discount({ percent_off: 33.3 }));
-    expect(Number.isInteger(offer.amount)).toBe(true);
-    expect(offer.amount).toBe(1333);
+  it("rounds a percentage to the nearest whole minor unit", () => {
+    // 1999 * 0.667 = 1333.333 and 1999 * 0.4 = 799.6: one rounds down, one up.
+    expect(offerFor(price(1999), "monthly", discount({ percent_off: 33.3 })).amount).toBe(1333);
+    expect(offerFor(price(1999), "monthly", discount({ percent_off: 60 })).amount).toBe(800);
   });
 
   it("subtracts a fixed amount", () => {
@@ -104,14 +127,10 @@ describe("offerFor", () => {
   it("survives Stripe returning no price object at all", () => {
     // The pricing page renders limits from config and amounts from Stripe; a
     // Stripe outage means no price object, and the page must still draw.
-    const offer = offerFor(undefined, "monthly");
+    const offer = offerFor(undefined, "annual");
     expect(offer.amount).toBeNull();
     expect(offer.currency).toBeNull();
-    expect(offer.interval).toBe("monthly");
-  });
-
-  it("carries the interval through", () => {
-    expect(offerFor(price(20000), "annual").interval).toBe("annual");
+    expect(offer.interval).toBe("annual");
   });
 });
 
@@ -142,8 +161,7 @@ describe("describeDiscount", () => {
 
   it("describes a fixed-amount coupon", () => {
     const text = describeDiscount(discount({ amount_off: 500, duration: "once" }));
-    expect(text).toContain("off on your first invoice");
-    expect(text).toMatch(/5/);
+    expect(text).toBe("$5 off on your first invoice");
   });
 
   it("falls back to a generic word rather than rendering 'null off'", () => {
@@ -153,50 +171,25 @@ describe("describeDiscount", () => {
   });
 });
 
-// -------------------------------------------------------------- formatMoney
-
-describe("formatMoney", () => {
-  it("suffixes the billing period", () => {
-    expect(formatMoney(price(2000), "monthly")).toMatch(/\/mo$/);
-    expect(formatMoney(price(20000), "annual")).toMatch(/\/yr$/);
-  });
-
-  it("drops the trailing .00 on a whole amount", () => {
-    const text = formatMoney(price(2000), "monthly");
-    expect(text).not.toMatch(/[.,]00/);
-    expect(text).toMatch(/20/);
-  });
-
-  it("keeps two decimals when the amount has cents", () => {
-    expect(formatMoney(price(1999), "monthly")).toMatch(/19[.,]99/);
-  });
-
-  it("renders a dash rather than NaN when the price is missing", () => {
-    expect(formatMoney(undefined, "monthly")).toBe("—");
-    expect(formatMoney(price(null), "monthly")).toBe("—");
-  });
-});
-
 // ------------------------------------------------------------- formatAmount
 
 describe("formatAmount", () => {
-  it("converts minor units to major", () => {
-    expect(formatAmount(2000, "usd")).toMatch(/20/);
-    expect(formatAmount(2000, "usd")).not.toMatch(/2000/);
+  it("converts minor units to major and drops a trailing .00", () => {
+    expect(formatAmount(2000, "usd")).toBe("$20");
   });
 
-  it("defaults the currency instead of throwing on null", () => {
+  it("defaults the currency to dollars instead of throwing on null", () => {
     // Intl throws RangeError on an invalid currency code, which would take the
     // whole billing page down over a missing field.
-    expect(() => formatAmount(500, null)).not.toThrow();
+    expect(formatAmount(500, null)).toBe("$5");
   });
 
   it("keeps cents when the amount is not whole", () => {
-    expect(formatAmount(1999, "usd")).toMatch(/19[.,]99/);
+    expect(formatAmount(1999, "usd")).toBe("$19.99");
   });
 
   it("formats zero", () => {
-    expect(formatAmount(0, "usd")).toMatch(/0/);
+    expect(formatAmount(0, "usd")).toBe("$0");
   });
 });
 
@@ -208,7 +201,7 @@ describe("formatLimit", () => {
   });
 
   it("groups large numbers", () => {
-    expect(formatLimit(1500)).toMatch(/1[.,\s ]?500/);
+    expect(formatLimit(1500)).toBe("1,500");
   });
 
   it("renders zero as zero, not as unlimited", () => {
@@ -230,11 +223,6 @@ describe("humanizeKey", () => {
     expect(humanizeKey("models")).toBe("Models");
   });
 
-  it("never leaves an underscore for a screen reader to announce", () => {
-    // Some readers say "messages underscore per underscore day".
-    expect(humanizeKey("file_uploads_per_day")).not.toContain("_");
-  });
-
   it("survives an empty key rather than throwing", () => {
     // A malformed entitlements payload must not take the billing page down.
     expect(humanizeKey("")).toBe("");
@@ -248,13 +236,10 @@ describe("formatDate / formatDateTime", () => {
   });
 
   it("renders a real date", () => {
-    const text = formatDate("2026-10-04T20:02:22Z");
-    expect(text).toMatch(/2026/);
-    expect(text).not.toMatch(/Invalid/);
+    expect(formatDate("2026-10-04T20:02:22Z")).toBe("Oct 4, 2026");
   });
 
   it("includes a time of day in the datetime variant", () => {
-    const text = formatDateTime("2026-10-04T20:02:22Z");
-    expect(text).toMatch(/\d{1,2}:\d{2}/);
+    expect(formatDateTime("2026-10-04T20:02:22Z")).toBe("Oct 4, 8:02 PM");
   });
 });

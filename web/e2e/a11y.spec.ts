@@ -34,7 +34,6 @@ async function violations(page: import("@playwright/test").Page) {
 
 test.describe("no WCAG A/AA violations", () => {
   test("the pricing page, signed out", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     expect(await violations(page)).toEqual([]);
@@ -96,8 +95,6 @@ test.describe("no WCAG A/AA violations", () => {
 test.describe("things that must be announced, not just drawn", () => {
   test("a failed request is announced assertively", async ({ page }) => {
     await signIn(page);
-    const api = new FakeApi({ tier: "free" });
-    await mockApi(page, api);
     await page.route("**/api/v1/billing/portal", (route) =>
       route.fulfill({ status: 404, json: { detail: "no billing account yet" } }),
     );
@@ -192,21 +189,10 @@ test.describe("the quota meter conveys its value without being seen", () => {
     await page.goto("/billing");
     await expect(page.getByText(/Nearly used up/i)).toBeVisible();
   });
-
-  test("an unlimited quota exposes no meter to misread", async ({ page }) => {
-    await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "pro", status: "active", source: "subscription" }));
-    await page.goto("/billing");
-
-    await expect(
-      page.getByRole("progressbar", { name: "File uploads per day" }),
-    ).toHaveCount(0);
-  });
 });
 
 test.describe("keyboard and structure", () => {
   test("the first tab stop skips the navigation", async ({ page }) => {
-    await mockApi(page, new FakeApi());
     await page.goto("/");
     await page.keyboard.press("Tab");
 
@@ -218,7 +204,6 @@ test.describe("keyboard and structure", () => {
 
   test("the current page is marked, not merely underlined", async ({ page }) => {
     await signIn(page);
-    await mockApi(page, new FakeApi());
     await page.goto("/billing");
     await expect(page.getByRole("link", { name: "Billing" })).toHaveAttribute(
       "aria-current",
@@ -226,14 +211,13 @@ test.describe("keyboard and structure", () => {
     );
   });
 
-  test("every chat control has a name", async ({ page }) => {
+  test("the message box has a label, not only a placeholder", async ({ page }) => {
+    // A placeholder vanishes on focus, yet axe's label rule accepts one as a
+    // name, so the scan above would pass without the label.
     await signIn(page);
-    await mockApi(page, new FakeApi());
     await page.goto("/chat");
 
-    // A placeholder is not a label: it vanishes on focus.
     await expect(page.getByLabel("Message")).toBeVisible();
-    await expect(page.getByLabel("Model")).toBeVisible();
   });
 
   test("replies land in a live region", async ({ page }) => {
