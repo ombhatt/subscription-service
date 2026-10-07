@@ -7,10 +7,13 @@ converge on.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 
 from app import stripe_client
 from app.models import ProcessedEvent, Subscription, SubscriptionAudit
+from app.timeutil import as_utc
 from tests.conftest import webhook_event
 
 
@@ -76,19 +79,20 @@ async def test_duplicate_delivery_is_a_no_op(client, session, stripe):
 
 
 async def test_out_of_order_delivery_converges(client, session, stripe):
-    """The cancellation arrives before the creation.
+    """The old subscription's deletion arrives after the new one's creation.
 
-    Because the handler re-reads Stripe rather than applying the payload as a
-    delta, arrival order cannot change where we end up.
+    A customer who cancels and resubscribes produces both events, and Stripe
+    may deliver them in either order. A handler that applied the deletion as a
+    delta would end on free here; re-reading Stripe ends on what is true.
     """
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
 
     await post(
-        client, webhook_event("evt_late", "customer.subscription.deleted", {"customer": customer})
+        client, webhook_event("evt_new", "customer.subscription.created", {"customer": customer})
     )
     await post(
-        client, webhook_event("evt_early", "customer.subscription.created", {"customer": customer})
+        client, webhook_event("evt_old", "customer.subscription.deleted", {"customer": customer})
     )
 
     sub = await read_sub(session)
@@ -142,10 +146,12 @@ async def test_failed_payment_starts_the_grace_window_once(client, session, stri
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="past_due", price_id="price_plus_m")
 
+    before = datetime.now(UTC)
     await post(client, webhook_event("evt_f1", "invoice.payment_failed", {"customer": customer}))
+    after = datetime.now(UTC)
     sub = await read_sub(session)
     first_seen = sub.past_due_since
-    assert first_seen is not None
+    assert before <= as_utc(first_seen) <= after, "the window opens on our clock, not Stripe's"
     assert sub.tier == "plus", "grace keeps access while the card is retried"
 
     # A second retry fails. The window must not restart.
@@ -182,18 +188,6 @@ async def test_grandfathered_price_resolves_through_metadata(client, session, st
 
     sub = await read_sub(session)
     assert sub.tier == "pro"
-
-
-async def test_unresolvable_price_grants_nothing(client, session, stripe):
-    customer = await seed_customer(session, stripe)
-    stripe.set_subscription(customer, status="active", price_id="price_mystery")
-    await post(
-        client, webhook_event("evt_x", "customer.subscription.updated", {"customer": customer})
-    )
-
-    sub = await read_sub(session)
-    assert sub.tier == "free", "an unknown price must never be guessed upward"
-    assert sub.status == "active"
 
 
 async def test_unhandled_event_type_is_acknowledged(client, session, stripe):

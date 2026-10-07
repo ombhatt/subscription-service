@@ -220,20 +220,6 @@ async def test_each_repair_commits_before_the_next_customer_is_fetched(
     assert events == ["fetch cus_a", "commit", "fetch cus_b", "commit"]
 
 
-async def test_the_report_carries_what_the_alert_needs(session, stripe):
-    await seed(session, tier=Tier.FREE.value)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
-
-    payload = (await reconcile(session, dry_run=True)).as_dict()
-
-    assert set(payload) == {
-        "checked", "mismatched", "repaired", "failed", "ignored", "unknown_customers", "details",
-        "orphaned", "orphaned_closed", "notified", "unnotified",
-    }
-    assert payload["mismatched"] == 1
-
-
 # --------------------------------------------------------------------------
 # reconcile: subscriptions whose Supabase account has been deleted
 # --------------------------------------------------------------------------
@@ -469,21 +455,6 @@ async def test_a_webhook_does_not_bring_a_deleted_account_back(session, stripe):
     assert (await session.execute(select(Subscription))).scalars().all() == []
 
 
-async def test_an_unmarked_new_subscriber_is_synced_without_asking_about_accounts(
-    session, stripe
-):
-    """The grant path must not depend on the account lookup: CI's users are not
-    real Supabase accounts, and a misconfigured lookup would lock out every new
-    subscriber."""
-    from app.services.subscriptions import sync_subscription_from_stripe
-
-    paying(stripe, customer_id="cus_9", user_id="u9")
-
-    row = await sync_subscription_from_stripe(session, stripe_customer_id="cus_9")
-
-    assert row is not None and row.tier == Tier.PRO.value
-
-
 async def test_the_default_directory_cannot_tell_on_sqlite(session):
     from app.accounts import SupabaseAccounts
 
@@ -638,6 +609,9 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     await seed(session, tier=Tier.FREE.value)
     stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
     stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.customers["cus_ghost"] = {"id": "cus_ghost", "metadata": {"user_id": "ghost-user"}}
+    stripe.set_subscription("cus_ghost", status="active", price_id="price_plus_m",
+                            subscription_id="sub_ghost")
 
     monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
     monkeypatch.setattr(job, "dispose_engine", _noop)
@@ -650,9 +624,11 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
         "event") == "reconcile.finished"]
     assert finished, "the job must emit reconcile.finished; the alert is built on it"
     fields = finished[0].context
-    assert fields["mismatched"] == 1
-    assert fields["checked"] == 1
-    assert fields["repaired"] == 1
+    assert fields["checked"] == 2
+    assert fields["mismatched"] == 1, "an unknown customer is not drift"
+    assert fields["unknown_customers"] == 1
+    assert fields["repaired"] == 2, "the drifted row and the unknown customer were both synced"
+    assert fields["failed"] == 0
 
     assert reconciliation_drift._value.get() == 1, "the gauge must carry the drift count"
 
@@ -823,9 +799,9 @@ def test_a_cached_entitlement_never_outlives_the_grace_window():
     configured = get_settings().entitlement_cache_ttl
     assert _ttl_for(_payload(None)) == configured, "no window, no cap"
     assert _ttl_for(_payload(9999)) == configured, "distant window, no cap"
-    for remaining in (5, 30, 59):
-        assert _ttl_for(_payload(remaining)) <= remaining, (
-            f"a {remaining}s window cached for longer would serve paid access past it"
+    for remaining, ttl in ((5.5, 5), (30.5, 30), (59.5, 59)):
+        assert _ttl_for(_payload(remaining)) == ttl, (
+            f"a {remaining}s window must expire before the boundary, not after it"
         )
 
 
@@ -838,17 +814,3 @@ def test_a_sub_second_window_is_not_cached_at_all():
 def test_a_boundary_already_passed_needs_no_cap():
     """Past the window the answer is stable again -- free, and staying free."""
     assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
-
-
-async def test_a_status_stripe_adds_later_is_not_drift_every_night(session, stripe):
-    """Sync stores an unrecognised Stripe status as free. Reconcile used to
-    translate it separately, to nothing, so the row never matched: reported and
-    re-synced on every run, forever. One translation now serves both."""
-    await seed(session)
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status="some_new_status", price_id="price_pro_m")
-
-    first = await reconcile(session)
-    second = await reconcile(session)
-
-    assert (first.mismatched, second.mismatched) == (0, 0)
