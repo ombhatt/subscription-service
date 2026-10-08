@@ -6,12 +6,13 @@
  * that a percentage was rounded the wrong way. They are pure and
  * deterministic, so they are the cheapest thing in the repo to cover properly.
  *
- * The app formats with the viewer's locale and time zone, so the suite pins
- * both to what Playwright uses (en-US, UTC) and asserts exact strings. Without
- * that, "$500 off" passes for "$5 off" and a date a day late passes for 2026.
+ * The app formats with the viewer's locale and time zone, so vitest.config.mts
+ * pins both to what Playwright uses (en-US, UTC) and these tests assert exact
+ * strings. Without that, "$500 off" passes for "$5 off" and a date a day late
+ * passes for 2026.
  */
 
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   type Discount,
@@ -24,33 +25,6 @@ import {
   humanizeKey,
   offerFor,
 } from "./types";
-
-beforeAll(() => {
-  vi.stubEnv("TZ", "UTC");
-  const locale = "en-US";
-  const NumberFormat = Intl.NumberFormat;
-  vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
-    locales?: Intl.LocalesArgument,
-    options?: Intl.NumberFormatOptions,
-  ) {
-    return new NumberFormat(locales ?? locale, options);
-  } as typeof Intl.NumberFormat);
-  const pin = (proto: object, method: string) => {
-    const target = proto as Record<string, (...args: unknown[]) => string>;
-    const original = target[method];
-    vi.spyOn(target, method).mockImplementation(function (
-      this: unknown,
-      locales?: unknown,
-      options?: unknown,
-    ) {
-      return original.call(this, locales ?? locale, options);
-    });
-  };
-  pin(Number.prototype, "toLocaleString");
-  pin(Date.prototype, "toLocaleString");
-  pin(Date.prototype, "toLocaleDateString");
-});
-
 
 const price = (unit_amount: number | null, currency: string | null = "usd"): Price => ({
   price_id: "price_x",
