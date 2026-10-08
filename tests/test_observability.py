@@ -13,7 +13,7 @@ import re
 from prometheus_client import REGISTRY as _DEFAULT_REGISTRY  # noqa: F401  (documents the contrast)
 
 from app.observability import JsonFormatter, event, request_id_var
-from tests.conftest import deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
 from tests.metrics import counted
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}

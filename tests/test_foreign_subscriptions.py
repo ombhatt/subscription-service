@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from app.jobs.reconcile import reconcile
 from app.models import Subscription
 from app.services.subscriptions import get_subscription, sync_subscription_from_stripe
-from tests.conftest import deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 # A price this service does not sell, with no tier metadata -- the shape another

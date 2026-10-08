@@ -1,6 +1,6 @@
 """Conversion tests against real StripeObjects.
 
-The Stripe fake in conftest hands back plain dicts, which is right for testing
+The Stripe fake in tests/fakes/stripe.py hands back plain dicts, which is right for testing
 our logic but means nothing there exercises the SDK's actual return types. That
 gap shipped a bug: `dict(stripe_object)` raises in stripe-python 8+, so every
 read helper failed on the first real API call while the whole suite stayed

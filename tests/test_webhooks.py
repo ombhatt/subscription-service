@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app import stripe_client
 from app.models import ProcessedEvent, Subscription, SubscriptionAudit
 from app.timeutil import as_utc
-from tests.conftest import deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
 
 
 async def seed_customer(session, stripe, user_id="u1", customer_id="cus_1") -> str:

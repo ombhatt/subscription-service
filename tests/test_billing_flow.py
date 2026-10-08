@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TOKEN_SUBJECT, bearer, deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
+from tests.fakes.supabase import TOKEN_SUBJECT, bearer
 
 USER = {"X-User-Id": "alice", "X-User-Email": "alice@example.com"}
 ADMIN = {"X-Admin-Key": "test-admin-key", "X-Admin-Actor": "support@example.com"}

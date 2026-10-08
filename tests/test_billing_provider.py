@@ -15,7 +15,7 @@ from app import stripe_client
 from app.billing_provider import PROVIDER_FUNCTIONS, BillingProvider
 from app.models import SubscriptionStatus
 from app.stripe_client import parse_subscription
-from tests.conftest import FakeStripe
+from tests.fakes.stripe import FakeStripe
 
 
 def contract(name: str) -> inspect.Signature:

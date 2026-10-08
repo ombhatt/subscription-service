@@ -15,7 +15,7 @@ from sqlalchemy import select
 from app.models import SalesInquiry
 from app.plans import CATALOG, TIER_RANK, Tier
 from app.services import quota
-from tests.conftest import TOKEN_SUBJECT, bearer
+from tests.fakes.supabase import TOKEN_SUBJECT, bearer
 from tests.metrics import counted
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
