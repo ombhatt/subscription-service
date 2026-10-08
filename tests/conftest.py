@@ -13,6 +13,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import jwt
 import pytest
@@ -125,6 +126,26 @@ async def sessionmaker_(engine):
 async def session(sessionmaker_):
     async with sessionmaker_() as s:
         yield s
+
+
+@pytest.fixture
+def run_main(sessionmaker_, monkeypatch, caplog):
+    """Run a job module's `main()` against the test database, as the cron would.
+
+    Returns its exit code and the structured events it logged, keyed by event
+    name: `code, events = await run_main(job)`.
+    """
+
+    async def run(job) -> tuple[int | None, dict[str, dict]]:
+        monkeypatch.setattr(job, "get_sessionmaker", lambda: sessionmaker_)
+        monkeypatch.setattr(job, "dispose_engine", AsyncMock())
+        monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+        with caplog.at_level("INFO"):
+            code = await job.main()
+        events = {r.context["event"]: r.context for r in caplog.records if hasattr(r, "context")}
+        return code, events
+
+    return run
 
 
 async def _current_user_for_tests(x_user_id: str | None = Header(default=None)) -> CurrentUser:

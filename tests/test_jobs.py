@@ -573,24 +573,8 @@ async def test_several_subscribers_are_handled_in_one_run(session):
 # is only a comment.
 
 
-class _FakeSessionmaker:
-    """Hands `main()` the test's own session without opening a real engine."""
-
-    def __init__(self, session):
-        self._session = session
-
-    def __call__(self):
-        return self
-
-    async def __aenter__(self):
-        return self._session
-
-    async def __aexit__(self, *exc):
-        return False
-
-
 async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
-    session, stripe, monkeypatch, caplog
+    session, stripe, run_main
 ):
     from app.jobs import reconcile as job
     from app.observability import REGISTRY
@@ -600,17 +584,13 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
     stripe.set_subscription("cus_ghost", user_id="ghost-user", status="active",
                             price_id="price_plus_m", subscription_id="sub_ghost")
 
-    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
-    monkeypatch.setattr(job, "dispose_engine", _noop)
-    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+    code, events = await run_main(job)
 
-    with caplog.at_level("INFO"):
-        assert await job.main() == 0, "drift that was repaired is a successful run"
-
-    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
-        "event") == "reconcile.finished"]
-    assert finished, "the job must emit reconcile.finished; the alert is built on it"
-    fields = finished[0].context
+    assert code == 0, "drift that was repaired is a successful run"
+    assert "reconcile.finished" in events, (
+        "the job must emit reconcile.finished; the alert is built on it"
+    )
+    fields = events["reconcile.finished"]
     assert fields["checked"] == 2
     assert fields["mismatched"] == 1, "an unknown customer is not drift"
     assert fields["unknown_customers"] == 1
@@ -623,7 +603,7 @@ async def test_reconcile_main_reports_drift_on_the_line_the_alert_watches(
 
 
 async def test_reconcile_main_fails_the_process_when_a_repair_failed(
-    session, stripe, monkeypatch, caplog
+    session, stripe, monkeypatch, run_main
 ):
     """A failed repair no longer stops the run -- that is the point -- but the
     scheduler must still see the job fail. Otherwise a customer stuck on the
@@ -637,20 +617,15 @@ async def test_reconcile_main_fails_the_process_when_a_repair_failed(
         raise ConnectionError("stripe is down")
 
     monkeypatch.setattr(stripe_client, "fetch_current_subscription", stripe_down)
-    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
-    monkeypatch.setattr(job, "dispose_engine", _noop)
-    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
 
-    with caplog.at_level("INFO"):
-        assert await job.main() == 1
+    code, events = await run_main(job)
 
-    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
-        "event") == "reconcile.finished"]
-    assert finished and finished[0].context["failed"] == 1
+    assert code == 1
+    assert events["reconcile.finished"]["failed"] == 1
 
 
 async def test_reconcile_main_reports_orphans_on_the_line_the_alert_watches(
-    session, stripe, monkeypatch, caplog
+    session, stripe, monkeypatch, caplog, run_main
 ):
     from app.jobs import reconcile as job
 
@@ -660,22 +635,19 @@ async def test_reconcile_main_reports_orphans_on_the_line_the_alert_watches(
 
     monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
     monkeypatch.setattr(job, "email_notifier", lambda: outbox)
-    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
-    monkeypatch.setattr(job, "dispose_engine", _noop)
-    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
 
-    with caplog.at_level("INFO"):
-        assert await job.main() == 0, "an orphan someone was told about is a clean run"
+    code, events = await run_main(job)
 
-    finished = [r for r in caplog.records if getattr(r, "context", {}).get(
-        "event") == "reconcile.finished"]
-    assert finished[0].context["orphaned"] == 1
-    assert finished[0].context["notified"] == 1
+    assert code == 0, "an orphan someone was told about is a clean run"
+    assert events["reconcile.finished"]["orphaned"] == 1
+    assert events["reconcile.finished"]["notified"] == 1
     assert any("ORPHANED" in r.getMessage() and "sub_1" in r.getMessage()
                for r in caplog.records if r.levelname == "ERROR")
 
 
-async def test_reconcile_main_fails_when_nobody_could_be_told(session, stripe, monkeypatch):
+async def test_reconcile_main_fails_when_nobody_could_be_told(
+    session, stripe, monkeypatch, run_main
+):
     from app.jobs import reconcile as job
 
     await seed(session, tier=Tier.PRO.value, status=SubscriptionStatus.ACTIVE.value)
@@ -683,34 +655,22 @@ async def test_reconcile_main_fails_when_nobody_could_be_told(session, stripe, m
 
     monkeypatch.setattr(job, "SupabaseAccounts", lambda: Accounts(deleted={"u1"}))
     monkeypatch.setattr(job, "email_notifier", lambda: None)
-    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
-    monkeypatch.setattr(job, "dispose_engine", _noop)
-    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
 
-    assert await job.main() == 1, "an orphan nobody was told about must not look like a clean run"
+    code, _ = await run_main(job)
+
+    assert code == 1, "an orphan nobody was told about must not look like a clean run"
 
 
-async def test_expire_grace_main_reports_what_it_revoked(session, monkeypatch, caplog):
+async def test_expire_grace_main_reports_what_it_revoked(session, run_main):
     from app.jobs import expire_grace as job
 
     await seed(session, **past_due(days_ago=10))
 
-    monkeypatch.setattr(job, "get_sessionmaker", lambda: _FakeSessionmaker(session))
-    monkeypatch.setattr(job, "dispose_engine", _noop)
-    monkeypatch.setattr(job, "configure_logging", lambda **kw: None)
+    _, events = await run_main(job)
 
-    with caplog.at_level("INFO"):
-        await job.main()
-
-    expired = [r for r in caplog.records if getattr(r, "context", {}).get(
-        "event") == "grace.expired"]
-    assert expired, "a nightly job that revokes access must say so"
-    assert expired[0].context["count"] == 1
-    assert expired[0].context["user_ids"] == ["u1"]
-
-
-async def _noop(*args, **kwargs):
-    return None
+    assert "grace.expired" in events, "a nightly job that revokes access must say so"
+    assert events["grace.expired"]["count"] == 1
+    assert events["grace.expired"]["user_ids"] == ["u1"]
 
 
 # ==========================================================================
