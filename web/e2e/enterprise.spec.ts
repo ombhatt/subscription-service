@@ -26,8 +26,8 @@ test.describe("the Enterprise card", () => {
 
   test("does not render unlimited context as zero", async ({ page }) => {
     const card = planCard(page, "Enterprise");
-    const context = card.locator("li").filter({ has: page.getByText("context", { exact: true }) });
-    await expect(context.locator("span").last()).toHaveText("Unlimited");
+    const context = card.getByRole("listitem").filter({ hasText: /^context/ });
+    await expect(context).toHaveText(/^context\s*Unlimited$/);
   });
 
   test("offers a conversation instead of a checkout", async ({ page }) => {

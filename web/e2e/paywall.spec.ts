@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
 test("a locked model names the tier that unlocks it", async ({ page, api }) => {
   await page.goto("/chat");
 
-  await page.locator("select").selectOption("reasoning");
+  await page.getByLabel("Model").selectOption("reasoning");
   await page.getByPlaceholder("Say something…").fill("does the paywall work?");
   await page.getByRole("button", { name: "Send" }).click();
 
@@ -24,7 +24,7 @@ test("a blocked model consumes no quota", async ({ page }) => {
   await page.goto("/chat");
   await expect(page.getByText("20 of 20 messages left today")).toBeVisible();
 
-  await page.locator("select").selectOption("large");
+  await page.getByLabel("Model").selectOption("large");
   await page.getByPlaceholder("Say something…").fill("hello");
   await page.getByRole("button", { name: "Send" }).click();
 
@@ -93,7 +93,7 @@ test("the paywall stays on screen through a long conversation", async ({ page, a
     await expect(page.locator(".bubble.them")).toHaveCount(i + 1);
   }
 
-  await page.locator("select").selectOption("reasoning");
+  await page.getByLabel("Model").selectOption("reasoning");
   await page.getByPlaceholder("Say something…").fill("and now a locked model");
   await page.getByRole("button", { name: "Send" }).click();
 
