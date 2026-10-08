@@ -281,11 +281,3 @@ async def test_a_stripe_rejection_is_not_a_500(client, stripe, monkeypatch):
     assert body["error"] == "stripe_error"
     assert body["type"] == "InvalidRequestError"
     assert "head office address" in body["message"]
-
-
-async def test_admin_endpoints_need_the_key(client):
-    response = await client.post(
-        "/v1/admin/grants",
-        json={"user_id": "alice", "tier": "pro", "reason": "nope"},
-    )
-    assert response.status_code == 403

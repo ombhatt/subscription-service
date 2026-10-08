@@ -38,19 +38,22 @@ USER = "alice"
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 
 
-async def _paid_and_synced_but_uncommitted(sessionmaker_, stripe):
-    """The webhook has landed and `sync` has flushed pro; nothing is committed."""
+@pytest.fixture
+async def paid_customer(sessionmaker_, stripe) -> None:
+    """Stripe says pro; the committed row has not caught up yet."""
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
     stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
 
-    writer = sessionmaker_()
-    await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
-    return writer
+
+async def _cache_the_free_tier(sessionmaker_) -> None:
+    """The webhook was lost and a reader has cached the stale free tier."""
+    async with sessionmaker_() as reader:
+        assert (await resolve_entitlements(reader, USER)).tier == "free"
 
 
-async def test_a_reader_just_before_the_commit_does_not_win(sessionmaker_, stripe):
+async def test_a_reader_just_before_the_commit_does_not_win(sessionmaker_, paid_customer):
     """The interleaving that used to serve a paying customer their old tier.
 
     A concurrent request runs at the last moment the writer's transaction is
@@ -59,7 +62,8 @@ async def test_a_reader_just_before_the_commit_does_not_win(sessionmaker_, strip
     commit and drops it. Invalidate first and this read lands after the
     invalidation, so its stale answer is what stays cached.
     """
-    writer = await _paid_and_synced_but_uncommitted(sessionmaker_, stripe)
+    writer = sessionmaker_()
+    await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
     real_commit = writer.commit
     seen_before_commit = []
 
@@ -83,13 +87,13 @@ async def test_a_reader_just_before_the_commit_does_not_win(sessionmaker_, strip
 
 
 async def test_sync_leaves_the_cached_entry_in_place_until_the_commit(
-    sessionmaker_, stripe
+    sessionmaker_, paid_customer
 ):
     """Sync does not commit, so clearing the cache there would let a reader
     repopulate it from the uncommitted row. The probe reads through the
     writer's own session, which sees the flushed pro row, so a free answer
     can only have come from the cache."""
-    await _paid_but_cached_as_free(sessionmaker_, stripe)
+    await _cache_the_free_tier(sessionmaker_)
 
     writer = sessionmaker_()
     try:
@@ -107,34 +111,27 @@ async def test_sync_leaves_the_cached_entry_in_place_until_the_commit(
         )
 
 
-async def test_a_rolled_back_write_invalidates_nothing(sessionmaker_, stripe):
+async def test_a_rolled_back_write_invalidates_nothing(sessionmaker_, paid_customer):
     """`session.info` is not transactional, so marks outlive a rollback on
     their own. The webhook failure path rolls back and then commits an error
     record with a plain commit -- without discarding the marks, the detector
-    would report a dropped invalidation on every failed webhook."""
-    writer = await _paid_and_synced_but_uncommitted(sessionmaker_, stripe)
-    undrained = counted("entitlement_invalidations_total", outcome="undrained")
+    would report a dropped invalidation on every failed webhook, and the
+    autouse `no_dropped_invalidations` fixture fails this test."""
+    writer = sessionmaker_()
     try:
+        await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
         await writer.rollback()
         await writer.commit()
     finally:
         await writer.close()
 
-    assert undrained() == 0, (
-        "a rolled-back write changes nothing and so invalidates nothing"
-    )
-
 
 @pytest.mark.allow_undrained
 async def test_a_plain_commit_under_a_marking_write_is_reported(
-    sessionmaker_, stripe, caplog
+    sessionmaker_, paid_customer, caplog
 ):
     """The detector. Someone adds a marking write beneath an existing
     `session.commit()` and nothing else would say so."""
-    async with sessionmaker_() as setup:
-        setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
-        await setup.commit()
-
     undrained = counted("entitlement_invalidations_total", outcome="undrained")
     async with sessionmaker_() as s:
         mark_entitlements_stale(s, USER)
@@ -189,24 +186,14 @@ async def test_a_cache_failure_after_commit_does_not_lose_the_write(
 # --------------------------------------------------------------------------
 
 
-async def _paid_but_cached_as_free(sessionmaker_, stripe) -> None:
-    """A customer paid, the webhook was lost, and their free tier is cached."""
-    async with sessionmaker_() as setup:
-        setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
-        await setup.commit()
-
-    async with sessionmaker_() as reader:
-        assert (await resolve_entitlements(reader, USER)).tier == "free"
-
-    stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
-
-
-async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker_, stripe):
+async def test_an_admin_resync_invalidates_after_its_commit(
+    client, sessionmaker_, paid_customer
+):
     """Support's fix for a missed webhook. The response said "resynced" and
     `tier: pro` while the customer went on seeing free until the entry expired
     -- so the fix looked like it had not worked, at exactly the moment someone
     was watching."""
-    await _paid_but_cached_as_free(sessionmaker_, stripe)
+    await _cache_the_free_tier(sessionmaker_)
 
     response = await client.post(f"/v1/admin/users/{USER}/resync", headers=ADMIN)
     assert response.status_code == 200
@@ -218,9 +205,9 @@ async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker
         )
 
 
-async def test_a_reconcile_repair_invalidates_after_its_commit(sessionmaker_, stripe):
+async def test_a_reconcile_repair_invalidates_after_its_commit(sessionmaker_, paid_customer):
     """The nightly safety net for missed webhooks, with the same gap."""
-    await _paid_but_cached_as_free(sessionmaker_, stripe)
+    await _cache_the_free_tier(sessionmaker_)
 
     async with sessionmaker_() as job:
         report = await reconcile(job)
