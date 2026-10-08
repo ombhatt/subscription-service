@@ -1,5 +1,5 @@
 import type { CheckoutPayload, PortalPayload } from "../lib/types";
-import { PLUS_SUBSCRIBER, PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
+import { PLUS_SUBSCRIBER, PRO_SUBSCRIBER, expect, planCard, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
@@ -8,18 +8,18 @@ test.beforeEach(async ({ page }) => {
 test("renders limits from config and amounts from Stripe", async ({ page }) => {
   await page.goto("/");
 
-  const pro = page.locator(".plan", { hasText: "Pro" });
+  const pro = planCard(page, "Pro");
   await expect(pro).toContainText("$100/mo");
   await expect(pro).toContainText("1,500");
   await expect(pro).toContainText("reasoning");
 
-  const free = page.locator(".plan", { hasText: "Free" }).first();
+  const free = planCard(page, "Free");
   await expect(free).toContainText("20");
 });
 
 test("the annual toggle swaps the amounts", async ({ page }) => {
   await page.goto("/");
-  const plus = page.locator(".plan", { hasText: "Plus" });
+  const plus = planCard(page, "Plus");
   await expect(plus).toContainText("$20/mo");
 
   await page.getByRole("button", { name: "Annual" }).click();
@@ -28,7 +28,7 @@ test("the annual toggle swaps the amounts", async ({ page }) => {
 
 test("a free user checks out the plan on the card, monthly by default", async ({ page, api }) => {
   await page.goto("/");
-  await page.locator(".plan", { hasText: "Pro" }).getByRole("button", { name: "Upgrade to Pro" }).click();
+  await planCard(page, "Pro").getByRole("button", { name: "Upgrade to Pro" }).click();
 
   await expect
     .poll(() => api.checkoutBodies)
@@ -38,7 +38,7 @@ test("a free user checks out the plan on the card, monthly by default", async ({
 test("the annual toggle travels to checkout", async ({ page, api }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Annual" }).click();
-  await page.locator(".plan", { hasText: "Plus" }).getByRole("button", { name: "Upgrade to Plus" }).click();
+  await planCard(page, "Plus").getByRole("button", { name: "Upgrade to Plus" }).click();
 
   await expect
     .poll(() => api.checkoutBodies)
@@ -52,10 +52,10 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
 
   // Labelled by what happens to *their* plan. "Change in portal" named the
   // mechanism and left the customer to work out which direction they were going.
-  const pro = page.locator(".plan", { hasText: "Pro" });
+  const pro = planCard(page, "Pro");
   await expect(pro.getByRole("button", { name: "Upgrade to Pro" })).toBeVisible();
   await expect(
-    page.locator(".plan", { hasText: "Free" }).getByRole("link", { name: "Cancel subscription" }),
+    planCard(page, "Free").getByRole("link", { name: "Cancel subscription" }),
   ).toBeVisible();
 
   await pro.getByRole("button", { name: "Upgrade to Pro" }).click();
@@ -71,7 +71,7 @@ test("the current plan is marked and cannot be re-bought", async ({ page, api })
   Object.assign(api.state, PRO_SUBSCRIBER);
   await page.goto("/");
 
-  const pro = page.locator(".plan", { hasText: "Pro" });
+  const pro = planCard(page, "Pro");
   // The eyebrow is uppercased in CSS, so the DOM text is still sentence case.
   await expect(pro.locator(".tag")).toHaveText("Current plan");
   await expect(pro.getByRole("button", { name: "Current plan" })).toBeDisabled();
@@ -93,7 +93,7 @@ test("a Stripe outage leaves the page usable without amounts", async ({ page, ap
   });
 
   await page.goto("/");
-  const pro = page.locator(".plan", { hasText: "Pro" });
+  const pro = planCard(page, "Pro");
   await expect(pro).toContainText("—");
   await expect(pro).toContainText("1,500");
 });
@@ -103,7 +103,7 @@ test("the annual toggle travels to the portal too", async ({ page, api }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: "Annual" }).click();
-  await page.locator(".plan", { hasText: "Pro" }).getByRole("button", { name: "Upgrade to Pro" }).click();
+  await planCard(page, "Pro").getByRole("button", { name: "Upgrade to Pro" }).click();
 
   await expect
     .poll(() => api.portalBodies)

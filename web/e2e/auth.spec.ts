@@ -1,4 +1,4 @@
-import { PRO_SUBSCRIBER, TEST_EMAIL, expect, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, TEST_EMAIL, expect, planCard, signIn, test } from "./fixtures";
 
 /**
  * Sessions, and what is reachable without one.
@@ -27,7 +27,7 @@ test("the pricing page renders without a session", async ({ page, api }) => {
   // It is the pricing page: someone who has never signed up has to see it.
   await page.goto("/");
 
-  await expect(page.locator(".plan", { hasText: "Pro" })).toContainText("$100/mo");
+  await expect(planCard(page, "Pro")).toContainText("$100/mo");
   await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
   // Nothing is marked as theirs, because there is no "them" yet.
   await expect(page.locator(".plan .tag", { hasText: "Current plan" })).toHaveCount(0);

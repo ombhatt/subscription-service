@@ -75,12 +75,12 @@ const UPLOAD_LIMITS: Record<Tier, number | null> = {
   pro: null,
   enterprise: null,
 };
-const DISPLAY: Record<Tier, string> = {
+const DISPLAY = {
   free: "Free",
   plus: "Plus",
   pro: "Pro",
   enterprise: "Enterprise",
-};
+} as const satisfies Record<Tier, string>;
 
 export interface FakeState {
   tier: Tier;
@@ -340,6 +340,14 @@ async function mockApi(page: Page, api: FakeApi) {
       } satisfies ChatReply,
     });
   });
+}
+
+/**
+ * A plan card on the pricing page, found by its heading. Matching the card's
+ * text instead finds "Free" or "Pro" anywhere a card mentions them.
+ */
+export function planCard(page: Page, name: (typeof DISPLAY)[Tier]) {
+  return page.locator(".plan").filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
 
 export const TEST_USER_ID = "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80";
