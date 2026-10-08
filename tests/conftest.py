@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -148,34 +149,50 @@ async def _optional_user_for_tests(
     return CurrentUser(id=x_user_id, email=f"{x_user_id}@example.test")
 
 
-@pytest_asyncio.fixture
-async def client(sessionmaker_):
+@asynccontextmanager
+async def _app_client(overrides: dict):
+    # The overrides live on the one shared `app`, so two clients in a test
+    # would see each other's. Refuse rather than let one silently win.
+    assert not app.dependency_overrides, "one app client per test"
+    app.dependency_overrides.update(overrides)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _sessions_from(sessionmaker_):
     async def override_get_session():
         async with sessionmaker_() as s:
             yield s
 
-    app.dependency_overrides[get_session] = override_get_session
-    app.dependency_overrides[get_current_user] = _current_user_for_tests
-    # The optional variant needs its own override, or an endpoint that uses it
-    # sees every test request as anonymous while the header says otherwise.
-    app.dependency_overrides[get_current_user_optional] = _optional_user_for_tests
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
-    app.dependency_overrides.clear()
+    return override_get_session
 
 
 @pytest_asyncio.fixture
-async def real_auth_client(client, signer):
+async def client(sessionmaker_):
+    overrides = {
+        get_session: _sessions_from(sessionmaker_),
+        get_current_user: _current_user_for_tests,
+        # The optional variant needs its own override, or an endpoint that uses
+        # it sees every test request as anonymous while the header says otherwise.
+        get_current_user_optional: _optional_user_for_tests,
+    }
+    async with _app_client(overrides) as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def real_auth_client(sessionmaker_, signer):
     """`client`, but identity comes from the app's own token verification.
 
     Tests that are about authentication itself need the real dependency to run;
     the header stub would only test the stub. Send `headers=bearer(signer())`
     to be someone.
     """
-    del app.dependency_overrides[get_current_user]
-    del app.dependency_overrides[get_current_user_optional]
-    return client
+    async with _app_client({get_session: _sessions_from(sessionmaker_)}) as c:
+        yield c
 
 
 # ---------------------------------------------------------------------------
