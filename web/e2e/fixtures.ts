@@ -108,7 +108,6 @@ class FakeApi {
   entitlementReads = 0;
   /** What each checkout call asked for: the tier and the billing interval. */
   checkoutBodies: CheckoutPayload[] = [];
-  portalCalls = 0;
   /** What each portal call asked for -- a tier means a deep link to that plan. */
   portalBodies: PortalPayload[] = [];
   cancelCalls = 0;
@@ -283,7 +282,6 @@ async function mockApi(page: Page, api: FakeApi) {
   });
 
   await page.route("**/api/v1/billing/portal", async (route) => {
-    api.portalCalls += 1;
     api.portalBodies.push(route.request().postDataJSON());
     await route.fulfill({ json: { portal_url: "http://localhost:3000/billing?portal=1" } });
   });

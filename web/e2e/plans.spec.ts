@@ -1,4 +1,4 @@
-import type { CheckoutPayload } from "../lib/types";
+import type { CheckoutPayload, PortalPayload } from "../lib/types";
 import { PLUS_SUBSCRIBER, PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
@@ -59,11 +59,12 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
   ).toBeVisible();
 
   await pro.getByRole("button", { name: "Upgrade to Pro" }).click();
-  await expect.poll(() => api.portalCalls).toBe(1);
-  expect(api.checkoutBodies).toEqual([]);
   // The tier travels with the click, so Stripe opens on a confirmation for Pro
   // rather than on a list the customer has to search.
-  expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "monthly" });
+  await expect
+    .poll(() => api.portalBodies)
+    .toEqual([{ tier: "pro", interval: "monthly" }] satisfies PortalPayload[]);
+  expect(api.checkoutBodies).toEqual([]);
 });
 
 test("the current plan is marked and cannot be re-bought", async ({ page, api }) => {
@@ -104,8 +105,9 @@ test("the annual toggle travels to the portal too", async ({ page, api }) => {
   await page.getByRole("button", { name: "Annual" }).click();
   await page.locator(".plan", { hasText: "Pro" }).getByRole("button", { name: "Upgrade to Pro" }).click();
 
-  await expect.poll(() => api.portalCalls).toBe(1);
-  expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "annual" });
+  await expect
+    .poll(() => api.portalBodies)
+    .toEqual([{ tier: "pro", interval: "annual" }] satisfies PortalPayload[]);
 });
 
 test("Manage billing asks for no particular plan", async ({ page, api }) => {
@@ -115,6 +117,5 @@ test("Manage billing asks for no particular plan", async ({ page, api }) => {
 
   await page.getByRole("button", { name: "Manage billing" }).click();
 
-  await expect.poll(() => api.portalCalls).toBe(1);
-  expect(api.portalBodies[0]).toEqual({});
+  await expect.poll(() => api.portalBodies).toEqual([{}] satisfies PortalPayload[]);
 });
