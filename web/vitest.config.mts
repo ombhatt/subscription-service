@@ -8,6 +8,12 @@ export default defineConfig({
     include: ["lib/**/*.test.ts", "components/**/*.test.ts"],
     exclude: ["e2e/**", "node_modules/**", ".next/**"],
     environment: "node",
+    // The same locale and time zone as playwright.config.ts, so formatted
+    // strings do not depend on the machine. Node reads these when a process
+    // starts, so they reach Intl only in a forked worker; under `threads` the
+    // tests would see the host's locale.
+    pool: "forks",
+    env: { TZ: "UTC", LC_ALL: "en_US.UTF-8" },
 
     coverage: {
       provider: "v8",

@@ -1,6 +1,17 @@
 import { test as base, type Page } from "@playwright/test";
 
-import type { Entitlements, Plan, Tier } from "../lib/types";
+import type {
+  ChatReply,
+  CheckoutPayload,
+  Discount,
+  Entitlements,
+  FeatureNotEntitled,
+  Plan,
+  PortalPayload,
+  QuotaExceeded,
+  SubscriptionSummary,
+  Tier,
+} from "../lib/types";
 
 /**
  * A stand-in for the API, installed as route handlers.
@@ -10,10 +21,13 @@ import type { Entitlements, Plan, Tier } from "../lib/types";
  * produce for real -- a subscriber inside a dunning grace window, a webhook
  * that never arrives, a quota already at its ceiling.
  *
- * Shapes here must match app/schemas.py. What catches drift is the compiler:
- * the fake returns the `Entitlements` and `Plan` types from lib/types.ts, which
- * are generated from the API's OpenAPI schema, so `tsc` fails when they part.
- * `subscription()` and the error bodies are untyped and have no such guard.
+ * Shapes here must match app/schemas.py, and `tsc` holds them to it. The
+ * entitlements, plans, subscription and chat responses, the discount in the
+ * state, and the recorded checkout and portal bodies all use types from
+ * lib/types.ts, which are generated from the API's OpenAPI schema. A key
+ * renamed or dropped on either side fails the compile. app/errors.py builds the
+ * 403 and 429 bodies outside the schema, so those are checked against the
+ * hand-written `FeatureNotEntitled` and `QuotaExceeded`, which can still drift.
  */
 
 const FEATURES: Record<Tier, Entitlements["features"]> = {
@@ -76,7 +90,7 @@ export interface FakeState {
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   graceEndsAt: string | null;
-  discount: Record<string, unknown> | null;
+  discount: Discount | null;
   /** Bumps the tier to this after N entitlement reads, to imitate a webhook landing. */
   grantAfterReads?: { reads: number; tier: Tier };
 }
@@ -93,10 +107,9 @@ class FakeApi {
   state: FakeState;
   entitlementReads = 0;
   /** What each checkout call asked for: the tier and the billing interval. */
-  checkoutBodies: Record<string, unknown>[] = [];
-  portalCalls = 0;
+  checkoutBodies: CheckoutPayload[] = [];
   /** What each portal call asked for -- a tier means a deep link to that plan. */
-  portalBodies: Record<string, unknown>[] = [];
+  portalBodies: PortalPayload[] = [];
   cancelCalls = 0;
   resumeCalls = 0;
 
@@ -159,7 +172,7 @@ class FakeApi {
     };
   }
 
-  subscription() {
+  subscription(): SubscriptionSummary {
     return {
       user_id: TEST_USER_ID,
       tier: this.state.tier,
@@ -246,7 +259,7 @@ async function mockApi(page: Page, api: FakeApi) {
   });
 
   await page.route("**/api/v1/billing/checkout", async (route) => {
-    api.checkoutBodies.push(route.request().postDataJSON() ?? {});
+    api.checkoutBodies.push(route.request().postDataJSON());
     // A real redirect would leave the app, so this one lands on the success
     // page instead.
     await route.fulfill({
@@ -269,8 +282,7 @@ async function mockApi(page: Page, api: FakeApi) {
   });
 
   await page.route("**/api/v1/billing/portal", async (route) => {
-    api.portalCalls += 1;
-    api.portalBodies.push(route.request().postDataJSON() ?? {});
+    api.portalBodies.push(route.request().postDataJSON());
     await route.fulfill({ json: { portal_url: "http://localhost:3000/billing?portal=1" } });
   });
 
@@ -291,7 +303,7 @@ async function mockApi(page: Page, api: FakeApi) {
           feature: `model:${body.model}`,
           current_tier: tier,
           required_tier: required ?? null,
-        },
+        } satisfies FeatureNotEntitled,
       });
       return;
     }
@@ -309,7 +321,7 @@ async function mockApi(page: Page, api: FakeApi) {
           reset_at: "2026-09-04T00:00:00Z",
           current_tier: tier,
           upgrade_tier: tier === "free" ? "plus" : tier === "plus" ? "pro" : null,
-        },
+        } satisfies QuotaExceeded,
       });
       return;
     }
@@ -325,7 +337,7 @@ async function mockApi(page: Page, api: FakeApi) {
           used: api.state.messagesUsed,
           remaining: limit === null ? null : limit - api.state.messagesUsed,
         },
-      },
+      } satisfies ChatReply,
     });
   });
 }

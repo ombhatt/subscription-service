@@ -10,7 +10,7 @@ import PriceTag from "@/components/PriceTag";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, getEntitlements, getPlans, openPortal, startCheckout } from "@/lib/api";
-import type { Entitlements, Interval, Plan } from "@/lib/types";
+import type { Entitlements, Interval, Plan, Tier } from "@/lib/types";
 import { TIER_RANK, formatLimit, offerFor } from "@/lib/types";
 import { useUser } from "@/lib/user";
 
@@ -42,7 +42,7 @@ export default function PricingPage() {
   }, [userId, ready]);
 
   const upgrade = useCallback(
-    async (tier: string) => {
+    async (tier: Tier) => {
       if (!userId) {
         // Signed out: they can read the prices, they just cannot buy yet.
         router.push("/login?next=/");
@@ -63,7 +63,7 @@ export default function PricingPage() {
   );
 
   const manage = useCallback(
-    async (target?: { tier: string; interval: Interval }) => {
+    async (target?: { tier: Tier; interval: Interval }) => {
       if (!ready) return;
       setBusy("portal");
       setError(null);

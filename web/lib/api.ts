@@ -1,11 +1,14 @@
 import { accessToken } from "./supabase";
 import type {
   ChatReply,
+  CheckoutPayload,
   Interval,
   ContactSalesPayload,
   Entitlements,
   Plan,
+  PortalPayload,
   SubscriptionSummary,
+  Tier,
 } from "./types";
 
 /**
@@ -115,10 +118,10 @@ export function getEntitlements() {
   return request<Entitlements>("/v1/entitlements");
 }
 
-export function startCheckout(tier: string, interval: "monthly" | "annual") {
+export function startCheckout(tier: Tier, interval: Interval) {
   return request<{ checkout_url: string; session_id: string }>("/v1/billing/checkout", {
     method: "POST",
-    body: JSON.stringify({ tier, interval }),
+    body: JSON.stringify({ tier, interval } satisfies CheckoutPayload),
   });
 }
 
@@ -145,10 +148,10 @@ export function resumeSubscription() {
  * confirmation for that plan -- a button that says "Upgrade to Pro" should not
  * land on a page where Pro has to be found again.
  */
-export function openPortal(target?: { tier: string; interval: Interval }) {
+export function openPortal(target?: { tier: Tier; interval: Interval }) {
   return request<{ portal_url: string }>("/v1/billing/portal", {
     method: "POST",
-    body: JSON.stringify(target ?? {}),
+    body: JSON.stringify((target ?? {}) satisfies PortalPayload),
   });
 }
 
