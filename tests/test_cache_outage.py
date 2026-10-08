@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from app.cache import set_cache
 from app.models import Subscription
+from tests.metrics import counted
 
 
 class DeadCache:
@@ -59,19 +60,18 @@ async def test_metered_requests_are_allowed_and_counted_elsewhere_when_redis_is_
     from sqlalchemy import select
 
     from app.models import UsageCounter
-    from app.observability import quota_errors
 
     session.add(Subscription(user_id="payer3", tier="pro", status="active"))
     await session.commit()
     set_cache(DeadCache())
-    before = quota_errors.labels(quota="messages_per_day")._value.get()
+    quota_errors = counted("quota_errors_total", quota="messages_per_day")
 
     response = await client.post(
         "/v1/chat", json={"model": "reasoning", "message": "hi"}, headers={"X-User-Id": "payer3"}
     )
 
     assert response.status_code == 200, response.text
-    assert quota_errors.labels(quota="messages_per_day")._value.get() == before + 1
+    assert quota_errors() == 1
     mirrored = (
         await session.scalars(select(UsageCounter.count).where(UsageCounter.user_id == "payer3"))
     ).all()

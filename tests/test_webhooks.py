@@ -14,15 +14,7 @@ from sqlalchemy import select
 from app import stripe_client
 from app.models import ProcessedEvent, Subscription, SubscriptionAudit
 from app.timeutil import as_utc
-from tests.conftest import webhook_event
-
-
-async def post(client, payload: str):
-    return await client.post(
-        "/v1/webhooks/stripe",
-        content=payload,
-        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
-    )
+from tests.conftest import deliver, webhook_event
 
 
 async def seed_customer(session, stripe, user_id="u1", customer_id="cus_1") -> str:
@@ -49,7 +41,7 @@ async def test_subscription_created_grants_the_tier(client, session, stripe):
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
 
-    response = await post(
+    response = await deliver(
         client, webhook_event("evt_1", "customer.subscription.created", {"customer": customer})
     )
     assert response.status_code == 200
@@ -66,8 +58,8 @@ async def test_duplicate_delivery_is_a_no_op(client, session, stripe):
     stripe.set_subscription(customer, status="active", price_id="price_plus_m")
     event = webhook_event("evt_dup", "customer.subscription.updated", {"customer": customer})
 
-    first = await post(client, event)
-    second = await post(client, event)
+    first = await deliver(client, event)
+    second = await deliver(client, event)
 
     assert first.json()["status"] == "ok"
     assert second.json()["status"] == "duplicate"
@@ -88,10 +80,10 @@ async def test_out_of_order_delivery_converges(client, session, stripe):
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
 
-    await post(
+    await deliver(
         client, webhook_event("evt_new", "customer.subscription.created", {"customer": customer})
     )
-    await post(
+    await deliver(
         client, webhook_event("evt_old", "customer.subscription.deleted", {"customer": customer})
     )
 
@@ -103,12 +95,12 @@ async def test_out_of_order_delivery_converges(client, session, stripe):
 async def test_cancellation_drops_to_free(client, session, stripe):
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    await post(
+    await deliver(
         client, webhook_event("evt_a", "customer.subscription.created", {"customer": customer})
     )
 
     stripe.subscriptions.pop(customer)
-    await post(
+    await deliver(
         client, webhook_event("evt_b", "customer.subscription.deleted", {"customer": customer})
     )
 
@@ -128,11 +120,11 @@ async def test_a_cancelled_subscription_still_listed_is_treated_as_gone(client, 
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
     created = webhook_event("evt_h1", "customer.subscription.created", {"customer": customer})
-    await post(client, created)
+    await deliver(client, created)
 
     stripe.set_subscription(customer, status="canceled", price_id="price_pro_m")
     deleted = webhook_event("evt_h2", "customer.subscription.deleted", {"customer": customer})
-    await post(client, deleted)
+    await deliver(client, deleted)
 
     sub = await read_sub(session)
     assert sub.tier == "free"
@@ -147,7 +139,7 @@ async def test_failed_payment_starts_the_grace_window_once(client, session, stri
     stripe.set_subscription(customer, status="past_due", price_id="price_plus_m")
 
     before = datetime.now(UTC)
-    await post(client, webhook_event("evt_f1", "invoice.payment_failed", {"customer": customer}))
+    await deliver(client, webhook_event("evt_f1", "invoice.payment_failed", {"customer": customer}))
     after = datetime.now(UTC)
     sub = await read_sub(session)
     first_seen = sub.past_due_since
@@ -155,7 +147,7 @@ async def test_failed_payment_starts_the_grace_window_once(client, session, stri
     assert sub.tier == "plus", "grace keeps access while the card is retried"
 
     # A second retry fails. The window must not restart.
-    await post(client, webhook_event("evt_f2", "invoice.payment_failed", {"customer": customer}))
+    await deliver(client, webhook_event("evt_f2", "invoice.payment_failed", {"customer": customer}))
     sub = await read_sub(session)
     assert sub.past_due_since == first_seen
 
@@ -163,10 +155,10 @@ async def test_failed_payment_starts_the_grace_window_once(client, session, stri
 async def test_recovery_clears_past_due(client, session, stripe):
     customer = await seed_customer(session, stripe)
     stripe.set_subscription(customer, status="past_due", price_id="price_plus_m")
-    await post(client, webhook_event("evt_g1", "invoice.payment_failed", {"customer": customer}))
+    await deliver(client, webhook_event("evt_g1", "invoice.payment_failed", {"customer": customer}))
 
     stripe.set_subscription(customer, status="active", price_id="price_plus_m")
-    await post(client, webhook_event("evt_g2", "invoice.paid", {"customer": customer}))
+    await deliver(client, webhook_event("evt_g2", "invoice.paid", {"customer": customer}))
 
     sub = await read_sub(session)
     assert sub.status == "active"
@@ -182,7 +174,7 @@ async def test_grandfathered_price_resolves_through_metadata(client, session, st
         price_id="price_old_pro_2024",
         price_metadata={"tier": "pro"},
     )
-    await post(
+    await deliver(
         client, webhook_event("evt_old", "customer.subscription.updated", {"customer": customer})
     )
 
@@ -192,7 +184,7 @@ async def test_grandfathered_price_resolves_through_metadata(client, session, st
 
 async def test_unhandled_event_type_is_acknowledged(client, session, stripe):
     customer = await seed_customer(session, stripe)
-    response = await post(
+    response = await deliver(
         client, webhook_event("evt_noise", "customer.created", {"customer": customer})
     )
     assert response.status_code == 200
@@ -215,7 +207,7 @@ async def test_a_failed_event_can_be_retried(client, session, stripe, monkeypatc
     monkeypatch.setattr(stripe_client, "fetch_current_subscription", boom)
 
     event = webhook_event("evt_retry", "customer.subscription.updated", {"customer": customer})
-    assert (await post(client, event)).status_code == 500
+    assert (await deliver(client, event)).status_code == 500
 
     row = await session.get(ProcessedEvent, "evt_retry")
     await session.refresh(row)
@@ -225,7 +217,7 @@ async def test_a_failed_event_can_be_retried(client, session, stripe, monkeypatc
     monkeypatch.setattr(
         stripe_client, "fetch_current_subscription", stripe.fetch_current_subscription
     )
-    retried = await post(client, event)
+    retried = await deliver(client, event)
     assert retried.status_code == 200
     assert retried.json()["status"] == "ok"
 

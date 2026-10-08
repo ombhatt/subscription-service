@@ -20,15 +20,11 @@ import pytest
 
 from app import flags
 from app.models import Subscription
-from app.observability import flag_evaluations
+from tests.metrics import counted
 
 APP = pathlib.Path(flags.__file__).resolve().parent
 ADMIN = {"X-Admin-Key": "test-admin-key"}
 USER = {"X-User-Id": "alice"}
-
-
-def counter(flag: str, source: str) -> float:
-    return flag_evaluations.labels(flag=flag, source=source)._value.get()
 
 
 class ExplodingClient:
@@ -78,22 +74,22 @@ async def test_a_raising_client_returns_the_default_rather_than_propagating():
 
 async def test_a_failure_is_counted_separately_from_an_answer():
     """A rising error rate is how you find out flags are silently not applying."""
-    before = counter("checkout-enabled", "error")
+    errors = counted("feature_flag_evaluations_total", flag="checkout-enabled", source="error")
     flags.set_client_for_tests(ExplodingClient())
     try:
         await flags.is_enabled("checkout-enabled")
     finally:
         flags.set_client_for_tests(None)
-    assert counter("checkout-enabled", "error") == before + 1
+    assert errors() == 1
 
 
 async def test_an_unknown_flag_is_loud_rather_than_quietly_false():
     """Falling back to False for a flag meant to default on is how a kill
     switch kills the wrong thing."""
     flags.set_client_for_tests(None)
-    before = counter("not-a-real-flag", "unknown")
+    unknown = counted("feature_flag_evaluations_total", flag="not-a-real-flag", source="unknown")
     assert await flags.value("not-a-real-flag") is None
-    assert counter("not-a-real-flag", "unknown") == before + 1
+    assert unknown() == 1
 
 
 async def test_init_never_raises_even_when_everything_is_wrong(monkeypatch):
@@ -125,11 +121,11 @@ async def test_no_client_key_is_a_normal_state_not_a_failure(monkeypatch):
 
 
 async def test_a_configured_flag_overrides_the_default():
-    before = counter("checkout-enabled", "remote")
+    remote = counted("feature_flag_evaluations_total", flag="checkout-enabled", source="remote")
     flags.set_client_for_tests(StubClient({"checkout-enabled": False}))
     try:
         assert await flags.is_enabled("checkout-enabled") is False
-        assert counter("checkout-enabled", "remote") == before + 1
+        assert remote() == 1
     finally:
         flags.set_client_for_tests(None)
 

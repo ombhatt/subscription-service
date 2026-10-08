@@ -41,8 +41,7 @@ PRICES = {
 async def test_reconcile_agrees_with_whatever_sync_wrote(session, stripe, status, price):
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_1"))
     await session.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": "u1"}}
-    stripe.set_subscription("cus_1", status=status, **PRICES[price])
+    stripe.set_subscription("cus_1", user_id="u1", status=status, **PRICES[price])
 
     await sync_subscription_from_stripe(session, stripe_customer_id="cus_1")
     await commit_and_invalidate(session)

@@ -9,7 +9,7 @@ loud, because a portal that opens on the wrong page still beats an error.
 
 from __future__ import annotations
 
-import json
+from tests.conftest import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 
@@ -20,16 +20,8 @@ async def subscribe(client, stripe, price_id: str = "price_plus_m") -> str:
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id=price_id)
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=json.dumps(
-            {
-                "id": "evt_p",
-                "type": "customer.subscription.created",
-                "data": {"object": {"customer": customer}},
-            }
-        ),
-        headers={"stripe-signature": "t=1,v1=fake"},
+    await deliver(
+        client, webhook_event("evt_p", "customer.subscription.created", {"customer": customer})
     )
     return customer
 

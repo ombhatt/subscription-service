@@ -59,6 +59,7 @@ from app.cache import InMemoryBackend, set_cache
 from app.db import get_session
 from app.main import app
 from app.models import Base
+from tests.metrics import counted
 
 
 def pytest_configure(config):
@@ -79,14 +80,11 @@ def no_dropped_invalidations(request):
     `commit_and_invalidate` and missed two -- `admin.resync` and `reconcile` --
     and the suite stayed green. This turns that log line into a failure.
     """
-    from app.observability import entitlement_invalidations
-
-    undrained = entitlement_invalidations.labels(outcome="undrained")
-    before = undrained._value.get()
+    undrained = counted("entitlement_invalidations_total", outcome="undrained")
     yield
     if request.node.get_closest_marker("allow_undrained"):
         return
-    dropped = undrained._value.get() - before
+    dropped = undrained()
     assert dropped == 0, (
         f"a plain session.commit() dropped entitlement invalidations {dropped:g} "
         "time(s) in this test -- commit marking writes with commit_and_invalidate()"
@@ -172,8 +170,8 @@ async def real_auth_client(client, signer):
     """`client`, but identity comes from the app's own token verification.
 
     Tests that are about authentication itself need the real dependency to run;
-    the header stub would only test the stub. Send `Authorization: Bearer
-    {signer()}` to be someone.
+    the header stub would only test the stub. Send `headers=bearer(signer())`
+    to be someone.
     """
     del app.dependency_overrides[get_current_user]
     del app.dependency_overrides[get_current_user_optional]
@@ -253,6 +251,10 @@ def signer(request, monkeypatch):
 
     auth.set_jwks_client(None)
     get_settings.cache_clear()
+
+
+def bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +418,10 @@ class FakeStripe:
         period_end: int = 1_702_592_000,
         cancel_at_period_end: bool = False,
         subscription_id: str = "sub_test",
+        user_id: str | None = None,
     ) -> dict:
+        if user_id is not None:
+            self.customers[customer_id] = {"id": customer_id, "metadata": {"user_id": user_id}}
         sub = {
             "id": subscription_id,
             "customer": customer_id,
@@ -459,3 +464,11 @@ def stripe(monkeypatch) -> FakeStripe:
 
 def webhook_event(event_id: str, event_type: str, obj: dict) -> str:
     return json.dumps({"id": event_id, "type": event_type, "data": {"object": obj}})
+
+
+async def deliver(client, payload: str):
+    return await client.post(
+        "/v1/webhooks/stripe",
+        content=payload,
+        headers={"stripe-signature": "t=1,v1=fake", "content-type": "application/json"},
+    )

@@ -8,11 +8,10 @@ keeps what they paid for until the boundary, and only the
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy import select
 
 from app.models import SubscriptionAudit
+from tests.conftest import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 
@@ -24,16 +23,8 @@ async def subscribe(client, stripe) -> str:
     )
     customer = stripe.checkout_sessions[0]["customer_id"]
     stripe.set_subscription(customer, status="active", price_id="price_pro_m")
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=json.dumps(
-            {
-                "id": "evt_sub",
-                "type": "customer.subscription.created",
-                "data": {"object": {"customer": customer}},
-            }
-        ),
-        headers={"stripe-signature": "t=1,v1=fake"},
+    await deliver(
+        client, webhook_event("evt_sub", "customer.subscription.created", {"customer": customer})
     )
     return customer
 
@@ -62,16 +53,8 @@ async def test_the_boundary_is_what_moves_them_to_free(client, stripe):
     await client.post("/v1/billing/cancel", headers=USER)
 
     stripe.subscriptions.pop(customer)
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=json.dumps(
-            {
-                "id": "evt_gone",
-                "type": "customer.subscription.deleted",
-                "data": {"object": {"customer": customer}},
-            }
-        ),
-        headers={"stripe-signature": "t=1,v1=fake"},
+    await deliver(
+        client, webhook_event("evt_gone", "customer.subscription.deleted", {"customer": customer})
     )
 
     assert (await client.get("/v1/entitlements", headers=USER)).json()["tier"] == "free"
@@ -146,16 +129,8 @@ async def test_there_is_nothing_to_resume_once_the_period_has_ended(client, stri
     customer = await subscribe(client, stripe)
     await client.post("/v1/billing/cancel", headers=USER)
     stripe.subscriptions.pop(customer)
-    await client.post(
-        "/v1/webhooks/stripe",
-        content=json.dumps(
-            {
-                "id": "evt_end",
-                "type": "customer.subscription.deleted",
-                "data": {"object": {"customer": customer}},
-            }
-        ),
-        headers={"stripe-signature": "t=1,v1=fake"},
+    await deliver(
+        client, webhook_event("evt_end", "customer.subscription.deleted", {"customer": customer})
     )
 
     response = await client.post("/v1/billing/resume", headers=USER)

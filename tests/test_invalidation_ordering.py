@@ -26,20 +26,16 @@ from sqlalchemy import select
 
 from app.jobs.reconcile import reconcile
 from app.models import Subscription
-from app.observability import entitlement_invalidations
 from app.services.entitlements import (
     commit_and_invalidate,
     mark_entitlements_stale,
     resolve_entitlements,
 )
 from app.services.subscriptions import sync_subscription_from_stripe
+from tests.metrics import counted
 
 USER = "alice"
 ADMIN = {"X-Admin-Key": "test-admin-key"}
-
-
-def counter(outcome: str) -> float:
-    return entitlement_invalidations.labels(outcome=outcome)._value.get()
 
 
 async def _paid_and_synced_but_uncommitted(sessionmaker_, stripe):
@@ -47,8 +43,7 @@ async def _paid_and_synced_but_uncommitted(sessionmaker_, stripe):
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
 
     writer = sessionmaker_()
     await sync_subscription_from_stripe(writer, stripe_customer_id="cus_1")
@@ -118,14 +113,14 @@ async def test_a_rolled_back_write_invalidates_nothing(sessionmaker_, stripe):
     record with a plain commit -- without discarding the marks, the detector
     would report a dropped invalidation on every failed webhook."""
     writer = await _paid_and_synced_but_uncommitted(sessionmaker_, stripe)
-    before = counter("undrained")
+    undrained = counted("entitlement_invalidations_total", outcome="undrained")
     try:
         await writer.rollback()
         await writer.commit()
     finally:
         await writer.close()
 
-    assert counter("undrained") == before, (
+    assert undrained() == 0, (
         "a rolled-back write changes nothing and so invalidates nothing"
     )
 
@@ -140,25 +135,25 @@ async def test_a_plain_commit_under_a_marking_write_is_reported(
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
 
-    before = counter("undrained")
+    undrained = counted("entitlement_invalidations_total", outcome="undrained")
     async with sessionmaker_() as s:
         mark_entitlements_stale(s, USER)
         with caplog.at_level(logging.ERROR):
             await s.commit()  # the wrong call, deliberately
 
-    assert counter("undrained") == before + 1
+    assert undrained() == 1
     assert any("commit_and_invalidate" in r.message for r in caplog.records), (
         "the detector must name the call the author should have used"
     )
 
 
 async def test_a_successful_invalidation_is_counted(sessionmaker_, stripe):
-    before = counter("ok")
+    ok = counted("entitlement_invalidations_total", outcome="ok")
     async with sessionmaker_() as s:
         s.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         mark_entitlements_stale(s, USER)
         await commit_and_invalidate(s)
-    assert counter("ok") == before + 1
+    assert ok() == 1
 
 
 async def test_a_cache_failure_after_commit_does_not_lose_the_write(
@@ -173,14 +168,14 @@ async def test_a_cache_failure_after_commit_does_not_lose_the_write(
         raise ConnectionError("redis is gone")
 
     monkeypatch.setattr(ents, "invalidate_entitlements", boom)
-    before = counter("failed")
+    failed = counted("entitlement_invalidations_total", outcome="failed")
 
     async with sessionmaker_() as s:
         s.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         mark_entitlements_stale(s, USER)
         await ents.commit_and_invalidate(s)   # must not raise
 
-    assert counter("failed") == before + 1
+    assert failed() == 1
     async with sessionmaker_() as check:
         row = (await check.execute(
             select(Subscription).where(Subscription.user_id == USER))).scalar_one_or_none()
@@ -199,12 +194,11 @@ async def _paid_but_cached_as_free(sessionmaker_, stripe) -> None:
     async with sessionmaker_() as setup:
         setup.add(Subscription(user_id=USER, stripe_customer_id="cus_1"))
         await setup.commit()
-    stripe.customers["cus_1"] = {"id": "cus_1", "metadata": {"user_id": USER}}
 
     async with sessionmaker_() as reader:
         assert (await resolve_entitlements(reader, USER)).tier == "free"
 
-    stripe.set_subscription("cus_1", status="active", price_id="price_pro_m")
+    stripe.set_subscription("cus_1", user_id=USER, status="active", price_id="price_pro_m")
 
 
 async def test_an_admin_resync_invalidates_after_its_commit(client, sessionmaker_, stripe):
