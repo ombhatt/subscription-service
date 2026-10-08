@@ -14,7 +14,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import auth
-from tests.conftest import TOKEN_ISSUER, TOKEN_KID, TOKEN_SUBJECT, token_keypair
+from tests.fakes.supabase import TOKEN_ISSUER, TOKEN_KID, TOKEN_SUBJECT, token_keypair
 
 
 @pytest.fixture(params=["RS256", "ES256"])

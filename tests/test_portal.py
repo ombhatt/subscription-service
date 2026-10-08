@@ -9,7 +9,7 @@ loud, because a portal that opens on the wrong page still beats an error.
 
 from __future__ import annotations
 
-from tests.conftest import deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 

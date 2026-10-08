@@ -131,7 +131,7 @@ async def test_a_discount_is_mirrored_and_then_cleared(client, session, stripe):
     from sqlalchemy import select
 
     from app.models import Subscription
-    from tests.conftest import deliver, webhook_event
+    from tests.fakes.stripe import deliver, webhook_event
 
     session.add(Subscription(user_id="u1", stripe_customer_id="cus_1"))
     await session.commit()

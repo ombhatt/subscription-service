@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.models import SubscriptionAudit
-from tests.conftest import deliver, webhook_event
+from tests.fakes.stripe import deliver, webhook_event
 
 USER = {"X-User-Id": "alice"}
 
