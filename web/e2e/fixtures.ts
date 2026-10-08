@@ -81,7 +81,15 @@ export interface FakeState {
   grantAfterReads?: { reads: number; tier: Tier };
 }
 
-export class FakeApi {
+export const PLUS_SUBSCRIBER = {
+  tier: "plus",
+  status: "active",
+  source: "subscription",
+} as const satisfies Partial<FakeState>;
+
+export const PRO_SUBSCRIBER = { ...PLUS_SUBSCRIBER, tier: "pro" } as const satisfies Partial<FakeState>;
+
+class FakeApi {
   state: FakeState;
   entitlementReads = 0;
   /** What each checkout call asked for: the tier and the billing interval. */
@@ -203,7 +211,7 @@ export class FakeApi {
 }
 
 /** Installs the fake on a page. Call before navigating. */
-export async function mockApi(page: Page, api: FakeApi) {
+async function mockApi(page: Page, api: FakeApi) {
   // Registered first, so every specific handler below outranks it. Anything
   // that reaches here is a call nobody mocked -- which would otherwise be
   // proxied to the real service by the Next rewrite. Fail loudly instead.
@@ -391,15 +399,19 @@ export async function signIn(
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 }
 
-export const test = base.extend<{ api: FakeApi }>({
+export const test = base.extend<{ fakeState: Partial<FakeState>; api: FakeApi }>({
+  // The state the fake starts in, for a file or describe block. A single test
+  // assigns to `api.state` instead.
+  fakeState: [{}, { option: true }],
+
   // `auto` matters: as a lazy fixture, any test that did not destructure `api`
   // installed no routes at all and its requests went through the Next rewrite
   // to the real service -- mutating real quota counters and making results
   // depend on whatever state that service happened to be in. Automatic setup
   // means no test can reach the live backend by omission.
   api: [
-    async ({ page }, use) => {
-      const api = new FakeApi();
+    async ({ page, fakeState }, use) => {
+      const api = new FakeApi(fakeState);
       await mockApi(page, api);
 
       // An uncaught exception in the app otherwise surfaces as "element not

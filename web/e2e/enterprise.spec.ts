@@ -9,7 +9,7 @@
 
 import AxeBuilder from "@axe-core/playwright";
 
-import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.describe("the Enterprise card", () => {
   test.beforeEach(async ({ page }) => {
@@ -92,10 +92,10 @@ test.describe("contacting sales", () => {
     await expect(page.getByRole("button", { name: "Send request" })).toBeDisabled();
   });
 
-  test("a signed-in subscriber sends their token so the lead is attributed", async ({ page }) => {
+  test("a signed-in subscriber sends their token so the lead is attributed", async ({ page, api }) => {
     // A Pro subscriber asking about Enterprise is a different conversation.
     await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "pro", status: "active", source: "subscription" }));
+    Object.assign(api.state, PRO_SUBSCRIBER);
 
     let auth: string | undefined;
     await page.route("**/api/v1/billing/contact-sales", async (route) => {
