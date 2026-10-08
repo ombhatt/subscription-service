@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -148,34 +149,50 @@ async def _optional_user_for_tests(
     return CurrentUser(id=x_user_id, email=f"{x_user_id}@example.test")
 
 
-@pytest_asyncio.fixture
-async def client(sessionmaker_):
+@asynccontextmanager
+async def _app_client(overrides: dict):
+    # The overrides live on the one shared `app`, so two clients in a test
+    # would see each other's. Refuse rather than let one silently win.
+    assert not app.dependency_overrides, "one app client per test"
+    app.dependency_overrides.update(overrides)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _sessions_from(sessionmaker_):
     async def override_get_session():
         async with sessionmaker_() as s:
             yield s
 
-    app.dependency_overrides[get_session] = override_get_session
-    app.dependency_overrides[get_current_user] = _current_user_for_tests
-    # The optional variant needs its own override, or an endpoint that uses it
-    # sees every test request as anonymous while the header says otherwise.
-    app.dependency_overrides[get_current_user_optional] = _optional_user_for_tests
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
-    app.dependency_overrides.clear()
+    return override_get_session
 
 
 @pytest_asyncio.fixture
-async def real_auth_client(client, signer):
+async def client(sessionmaker_):
+    overrides = {
+        get_session: _sessions_from(sessionmaker_),
+        get_current_user: _current_user_for_tests,
+        # The optional variant needs its own override, or an endpoint that uses
+        # it sees every test request as anonymous while the header says otherwise.
+        get_current_user_optional: _optional_user_for_tests,
+    }
+    async with _app_client(overrides) as c:
+        yield c
+
+
+@pytest_asyncio.fixture
+async def real_auth_client(sessionmaker_, signer):
     """`client`, but identity comes from the app's own token verification.
 
     Tests that are about authentication itself need the real dependency to run;
     the header stub would only test the stub. Send `headers=bearer(signer())`
     to be someone.
     """
-    del app.dependency_overrides[get_current_user]
-    del app.dependency_overrides[get_current_user_optional]
-    return client
+    async with _app_client({get_session: _sessions_from(sessionmaker_)}) as c:
+        yield c
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +203,8 @@ TOKEN_ISSUER = "https://project.supabase.co/auth/v1"
 TOKEN_KID = "test-signing-key"
 TOKEN_SUBJECT = "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80"
 
-# Supabase signs with whichever the project was created with. New projects
-# default to ES256; the docs describe RS256 as the default, so both are pinned
-# in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would have
-# left the algorithm actually in use uncovered.
-TOKEN_ALGORITHMS = ["RS256", "ES256"]
 
-
-def token_keypair(algorithm: str = "RS256"):
+def token_keypair(algorithm: str):
     if algorithm == "ES256":
         private = ec.generate_private_key(ec.SECP256R1())
     else:
@@ -216,20 +227,22 @@ class _StubJWKSClient:
         return type("Key", (), {"key": self._public_key})()
 
 
-@pytest.fixture(params=TOKEN_ALGORITHMS)
-def signer(request, monkeypatch):
-    """A working Supabase-shaped setup: configured URL and a known signing key.
+@pytest.fixture
+def token_algorithm() -> str:
+    """ES256, what new Supabase projects sign with. tests/test_auth_tokens.py
+    overrides this to cover RS256 too."""
+    return "ES256"
 
-    Parametrised over both signing algorithms, because which one a project uses
-    is decided when the project is created, not by us.
-    """
-    algorithm = request.param
+
+@pytest.fixture
+def signer(token_algorithm, monkeypatch):
+    """A working Supabase-shaped setup: configured URL and a known signing key."""
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     from app.config import get_settings
 
     get_settings.cache_clear()
-    private, private_pem = token_keypair(algorithm)
+    private, private_pem = token_keypair(token_algorithm)
     auth.set_jwks_client(_StubJWKSClient(private.public_key()))
 
     def mint(**overrides) -> str:
@@ -245,7 +258,9 @@ def signer(request, monkeypatch):
         }
         claims.update(overrides)
         claims = {k: v for k, v in claims.items() if v is not None}
-        return jwt.encode(claims, private_pem, algorithm=algorithm, headers={"kid": TOKEN_KID})
+        return jwt.encode(
+            claims, private_pem, algorithm=token_algorithm, headers={"kid": TOKEN_KID}
+        )
 
     yield mint
 
