@@ -203,14 +203,8 @@ TOKEN_ISSUER = "https://project.supabase.co/auth/v1"
 TOKEN_KID = "test-signing-key"
 TOKEN_SUBJECT = "8f14e45f-ceea-467a-9c1e-3f2a1b6c7d80"
 
-# Supabase signs with whichever the project was created with. New projects
-# default to ES256; the docs describe RS256 as the default, so both are pinned
-# in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would have
-# left the algorithm actually in use uncovered.
-TOKEN_ALGORITHMS = ["RS256", "ES256"]
 
-
-def token_keypair(algorithm: str = "RS256"):
+def token_keypair(algorithm: str):
     if algorithm == "ES256":
         private = ec.generate_private_key(ec.SECP256R1())
     else:
@@ -233,20 +227,22 @@ class _StubJWKSClient:
         return type("Key", (), {"key": self._public_key})()
 
 
-@pytest.fixture(params=TOKEN_ALGORITHMS)
-def signer(request, monkeypatch):
-    """A working Supabase-shaped setup: configured URL and a known signing key.
+@pytest.fixture
+def token_algorithm() -> str:
+    """ES256, what new Supabase projects sign with. tests/test_auth_tokens.py
+    overrides this to cover RS256 too."""
+    return "ES256"
 
-    Parametrised over both signing algorithms, because which one a project uses
-    is decided when the project is created, not by us.
-    """
-    algorithm = request.param
+
+@pytest.fixture
+def signer(token_algorithm, monkeypatch):
+    """A working Supabase-shaped setup: configured URL and a known signing key."""
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     from app.config import get_settings
 
     get_settings.cache_clear()
-    private, private_pem = token_keypair(algorithm)
+    private, private_pem = token_keypair(token_algorithm)
     auth.set_jwks_client(_StubJWKSClient(private.public_key()))
 
     def mint(**overrides) -> str:
@@ -262,7 +258,9 @@ def signer(request, monkeypatch):
         }
         claims.update(overrides)
         claims = {k: v for k, v in claims.items() if v is not None}
-        return jwt.encode(claims, private_pem, algorithm=algorithm, headers={"kid": TOKEN_KID})
+        return jwt.encode(
+            claims, private_pem, algorithm=token_algorithm, headers={"kid": TOKEN_KID}
+        )
 
     yield mint
 

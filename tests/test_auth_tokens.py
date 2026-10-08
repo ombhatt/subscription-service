@@ -17,6 +17,15 @@ from app import auth
 from tests.conftest import TOKEN_ISSUER, TOKEN_KID, TOKEN_SUBJECT, token_keypair
 
 
+@pytest.fixture(params=["RS256", "ES256"])
+def token_algorithm(request) -> str:
+    """Supabase signs with whichever the project was created with. New projects
+    default to ES256; the docs describe RS256 as the default, so both are pinned
+    in ALLOWED_ALGORITHMS and both are exercised here. Testing only RSA would
+    have left the algorithm actually in use uncovered."""
+    return request.param
+
+
 def test_a_valid_token_identifies_the_user(signer):
     claims = auth.verify_token(signer())
     assert claims["sub"] == TOKEN_SUBJECT
@@ -54,9 +63,8 @@ def test_a_token_without_a_subject_is_refused(signer):
     assert raised.value.status_code == 401
 
 
-def test_a_token_signed_by_a_different_key_is_refused(signer, request):
-    algorithm = request.node.callspec.params["signer"]
-    _, other_pem = token_keypair(algorithm)
+def test_a_token_signed_by_a_different_key_is_refused(signer, token_algorithm):
+    _, other_pem = token_keypair(token_algorithm)
     forged = jwt.encode(
         {
             "sub": "attacker",
@@ -65,7 +73,7 @@ def test_a_token_signed_by_a_different_key_is_refused(signer, request):
             "exp": datetime.now(UTC) + timedelta(hours=1),
         },
         other_pem,
-        algorithm=algorithm,
+        algorithm=token_algorithm,
         headers={"kid": TOKEN_KID},
     )
     with pytest.raises(HTTPException) as raised:
