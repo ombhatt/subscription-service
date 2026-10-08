@@ -1,4 +1,4 @@
-import { FakeApi, TEST_EMAIL, expect, mockApi, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, TEST_EMAIL, expect, signIn, test } from "./fixtures";
 
 /**
  * Sessions, and what is reachable without one.
@@ -41,9 +41,8 @@ test("upgrading while signed out asks you to sign in first", async ({ page, api 
   expect(api.checkoutBodies).toEqual([]);
 });
 
-test("signing in reaches every component, not just the nav", async ({ page }) => {
-  const api = new FakeApi({ tier: "pro", status: "active", source: "subscription" });
-  await mockApi(page, api);
+test("signing in reaches every component, not just the nav", async ({ page, api }) => {
+  Object.assign(api.state, PRO_SUBSCRIBER);
   await signIn(page);
 
   await expect(page.locator(".who")).toHaveText(TEST_EMAIL);

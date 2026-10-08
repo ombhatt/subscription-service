@@ -1,18 +1,15 @@
-import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test("shows the plan, its renewal date and its usage", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("shows the plan, its renewal date and its usage", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     messagesUsed: 12,
     currentPeriodEnd: "2026-10-03T03:43:47Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   await expect(page.getByRole("heading", { name: /Pro/ })).toBeVisible();
@@ -21,10 +18,9 @@ test("shows the plan, its renewal date and its usage", async ({ page }) => {
   await expect(page.getByText("12 / 1,500")).toBeVisible();
 });
 
-test("an unlimited quota draws no bar", async ({ page }) => {
+test("an unlimited quota draws no bar", async ({ page, api }) => {
   // A full-width meter would imply a ceiling that does not exist.
-  const api = new FakeApi({ tier: "pro", status: "active", source: "subscription" });
-  await mockApi(page, api);
+  Object.assign(api.state, PRO_SUBSCRIBER);
   await page.goto("/billing");
 
   // Scoped to the meter: "Unlimited" also appears in the feature list below.
@@ -34,15 +30,14 @@ test("an unlimited quota draws no bar", async ({ page }) => {
   await expect(page.locator(".meter")).toHaveCount(1);
 });
 
-test("a failed payment explains the grace window", async ({ page }) => {
-  const api = new FakeApi({
+test("a failed payment explains the grace window", async ({ page, api }) => {
+  Object.assign(api.state, {
     tier: "plus",
     status: "past_due",
     source: "subscription",
     graceEndsAt: "2026-09-10T00:00:00Z",
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   const banner = page.locator(".banner.warn");
@@ -52,15 +47,12 @@ test("a failed payment explains the grace window", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Plus/ })).toBeVisible();
 });
 
-test("a cancelled subscription says when access ends", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a cancelled subscription says when access ends", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     cancelAtPeriodEnd: true,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   const banner = page.locator(".banner.warn");
@@ -71,9 +63,8 @@ test("a cancelled subscription says when access ends", async ({ page }) => {
   await expect(banner.getByRole("button", { name: "Resume subscription" })).toBeVisible();
 });
 
-test("a comped account is labelled as granted", async ({ page }) => {
-  const api = new FakeApi({ tier: "pro", status: "free", source: "grant" });
-  await mockApi(page, api);
+test("a comped account is labelled as granted", async ({ page, api }) => {
+  Object.assign(api.state, { tier: "pro", status: "free", source: "grant" });
   await page.goto("/billing");
 
   await expect(page.locator(".banner")).toContainText("Complimentary access");
@@ -95,11 +86,9 @@ test("a free user with no billing account is told, not broken", async ({ page })
 });
 
 
-test("a redeemed promotion code is shown, with its size and end date", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a redeemed promotion code is shown, with its size and end date", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     discount: {
       coupon_id: "LAUNCH25",
       name: "Launch 25",
@@ -113,7 +102,6 @@ test("a redeemed promotion code is shown, with its size and end date", async ({ 
       ends_at: 1799020800,
     },
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   const banner = page.locator(".banner", { hasText: "Discount applied" });
@@ -128,14 +116,11 @@ test("no discount means no banner", async ({ page, api }) => {
   await expect(page.locator(".banner", { hasText: "Discount applied" })).toHaveCount(0);
 });
 
-test("cancelling in the app schedules the end of the period", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("cancelling in the app schedules the end of the period", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
   await expect(page.getByText(/Renews Oct 3, 2026/)).toBeVisible();
 
@@ -149,14 +134,11 @@ test("cancelling in the app schedules the end of the period", async ({ page }) =
   expect(api.cancelCalls).toBe(1);
 });
 
-test("the confirmation step can be backed out of", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("the confirmation step can be backed out of", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   await page.getByRole("button", { name: "Cancel subscription" }).click();
@@ -168,39 +150,31 @@ test("the confirmation step can be backed out of", async ({ page }) => {
   expect(api.cancelCalls).toBe(0);
 });
 
-test("a plan already ending offers no cancel button", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a plan already ending offers no cancel button", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     cancelAtPeriodEnd: true,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   await expect(page.getByRole("button", { name: "Cancel subscription" })).toHaveCount(0);
 });
 
-test("the plan card says what it costs", async ({ page }) => {
+test("the plan card says what it costs", async ({ page, api }) => {
   // The one number a customer opens this page to check, and it was not here.
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   await expect(page.locator(".card").first().locator(".price-now")).toHaveText("$100/mo");
 });
 
-test("a discount is applied to the amount shown, not just described", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a discount is applied to the amount shown, not just described", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
     discount: {
       coupon_id: "LAUNCH",
@@ -214,7 +188,6 @@ test("a discount is applied to the amount shown, not just described", async ({ p
       ends_at: null,
     },
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   const card = page.locator(".card").first();
@@ -222,15 +195,12 @@ test("a discount is applied to the amount shown, not just described", async ({ p
   await expect(card.locator(".price-was")).toHaveText("$100");
 });
 
-test("a pending cancellation can be undone from the banner", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a pending cancellation can be undone from the banner", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     cancelAtPeriodEnd: true,
     currentPeriodEnd: "2026-10-03T00:00:00Z",
   });
-  await mockApi(page, api);
   await page.goto("/billing");
 
   const banner = page.locator(".banner.warn");
