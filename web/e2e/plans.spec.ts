@@ -1,4 +1,4 @@
-import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
+import { PLUS_SUBSCRIBER, PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
@@ -40,10 +40,9 @@ test("the annual toggle travels to checkout", async ({ page, api }) => {
   await expect.poll(() => api.checkoutBodies).toEqual([{ tier: "plus", interval: "annual" }]);
 });
 
-test("a subscriber is sent to the portal, never to a second checkout", async ({ page }) => {
+test("a subscriber is sent to the portal, never to a second checkout", async ({ page, api }) => {
   // The API refuses a second checkout with a 409; the UI should not offer one.
-  const api = new FakeApi({ tier: "plus", status: "active", source: "subscription" });
-  await mockApi(page, api);
+  Object.assign(api.state, PLUS_SUBSCRIBER);
   await page.goto("/");
 
   // Labelled by what happens to *their* plan. "Change in portal" named the
@@ -62,9 +61,8 @@ test("a subscriber is sent to the portal, never to a second checkout", async ({ 
   expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "monthly" });
 });
 
-test("the current plan is marked and cannot be re-bought", async ({ page }) => {
-  const api = new FakeApi({ tier: "pro", status: "active", source: "subscription" });
-  await mockApi(page, api);
+test("the current plan is marked and cannot be re-bought", async ({ page, api }) => {
+  Object.assign(api.state, PRO_SUBSCRIBER);
   await page.goto("/");
 
   const pro = page.locator(".plan", { hasText: "Pro" });
@@ -73,10 +71,9 @@ test("the current plan is marked and cannot be re-bought", async ({ page }) => {
   await expect(pro.getByRole("button", { name: "Current plan" })).toBeDisabled();
 });
 
-test("a Stripe outage leaves the page usable without amounts", async ({ page }) => {
+test("a Stripe outage leaves the page usable without amounts", async ({ page, api }) => {
   // The API degrades to null amounts rather than failing; the page should too.
   await page.route("**/api/v1/billing/plans", async (route) => {
-    const api = new FakeApi();
     const plans = api.plans().map((plan) => ({
       ...plan,
       prices: Object.fromEntries(
@@ -95,9 +92,8 @@ test("a Stripe outage leaves the page usable without amounts", async ({ page }) 
   await expect(pro).toContainText("1,500");
 });
 
-test("the annual toggle travels to the portal too", async ({ page }) => {
-  const api = new FakeApi({ tier: "plus", status: "active", source: "subscription" });
-  await mockApi(page, api);
+test("the annual toggle travels to the portal too", async ({ page, api }) => {
+  Object.assign(api.state, PLUS_SUBSCRIBER);
   await page.goto("/");
 
   await page.getByRole("button", { name: "Annual" }).click();
@@ -107,10 +103,9 @@ test("the annual toggle travels to the portal too", async ({ page }) => {
   expect(api.portalBodies[0]).toMatchObject({ tier: "pro", interval: "annual" });
 });
 
-test("Manage billing asks for no particular plan", async ({ page }) => {
+test("Manage billing asks for no particular plan", async ({ page, api }) => {
   // The billing page's button opens the portal itself, not a plan change.
-  const api = new FakeApi({ tier: "pro", status: "active", source: "subscription" });
-  await mockApi(page, api);
+  Object.assign(api.state, PRO_SUBSCRIBER);
   await page.goto("/billing");
 
   await page.getByRole("button", { name: "Manage billing" }).click();

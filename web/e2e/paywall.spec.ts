@@ -1,4 +1,4 @@
-import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
@@ -42,9 +42,8 @@ test("an allowed model answers and decrements the quota", async ({ page }) => {
   await expect(page.getByText("19 of 20 messages left today")).toBeVisible();
 });
 
-test("running out of messages says when it resets and what lifts it", async ({ page }) => {
-  const api = new FakeApi({ messagesUsed: 20 });
-  await mockApi(page, api);
+test("running out of messages says when it resets and what lifts it", async ({ page, api }) => {
+  api.state.messagesUsed = 20;
   await page.goto("/chat");
 
   await page.getByPlaceholder("Say something…").fill("one too many");
@@ -58,14 +57,11 @@ test("running out of messages says when it resets and what lifts it", async ({ p
   await expect(banner.getByRole("link", { name: "Upgrade" })).toBeVisible();
 });
 
-test("a Pro user is offered no upgrade when nothing is above them", async ({ page }) => {
-  const api = new FakeApi({
-    tier: "pro",
-    status: "active",
-    source: "subscription",
+test("a Pro user is offered no upgrade when nothing is above them", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PRO_SUBSCRIBER,
     messagesUsed: 1500,
   });
-  await mockApi(page, api);
   await page.goto("/chat");
 
   await page.getByPlaceholder("Say something…").fill("over the top");

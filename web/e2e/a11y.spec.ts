@@ -15,7 +15,7 @@
 
 import AxeBuilder from "@axe-core/playwright";
 
-import { FakeApi, expect, mockApi, signIn, test } from "./fixtures";
+import { PLUS_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 async function violations(page: import("@playwright/test").Page) {
   const results = await new AxeBuilder({ page })
@@ -45,41 +45,38 @@ test.describe("no WCAG A/AA violations", () => {
     expect(await violations(page)).toEqual([]);
   });
 
-  test("billing, with every banner showing at once", async ({ page }) => {
+  test("billing, with every banner showing at once", async ({ page, api }) => {
     // Deliberately the worst case: dunning, a pending cancellation and a
     // discount all on screen, which is the state most likely to break.
     await signIn(page);
-    await mockApi(
-      page,
-      new FakeApi({
-        tier: "plus",
-        status: "past_due",
-        source: "subscription",
-        messagesUsed: 290,
-        currentPeriodEnd: "2026-10-03T03:43:47Z",
-        cancelAtPeriodEnd: true,
-        graceEndsAt: "2026-09-11T00:00:00Z",
-        discount: {
-          coupon_id: "co_1",
-          name: "Launch",
-          percent_off: 25,
-          amount_off: null,
-          currency: "usd",
-          duration: "repeating",
-          duration_in_months: 3,
-          promotion_code: "LAUNCH25",
-          ends_at: null,
-        },
-      }),
-    );
+    Object.assign(api.state, {
+      tier: "plus",
+      status: "past_due",
+      source: "subscription",
+      messagesUsed: 290,
+      currentPeriodEnd: "2026-10-03T03:43:47Z",
+      cancelAtPeriodEnd: true,
+      graceEndsAt: "2026-09-11T00:00:00Z",
+      discount: {
+        coupon_id: "co_1",
+        name: "Launch",
+        percent_off: 25,
+        amount_off: null,
+        currency: "usd",
+        duration: "repeating",
+        duration_in_months: 3,
+        promotion_code: "LAUNCH25",
+        ends_at: null,
+      },
+    });
     await page.goto("/billing");
     await expect(page.getByRole("heading", { name: /Plus/ })).toBeVisible();
     expect(await violations(page)).toEqual([]);
   });
 
-  test("chat, after hitting the paywall", async ({ page }) => {
+  test("chat, after hitting the paywall", async ({ page, api }) => {
     await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "free", messagesUsed: 20 }));
+    api.state.messagesUsed = 20;
     await page.goto("/chat");
     await page.getByLabel("Message").fill("hello");
     await page.getByRole("button", { name: "Send" }).click();
@@ -112,9 +109,9 @@ test.describe("things that must be announced, not just drawn", () => {
     await expect(alert).toContainText(/went wrong/i);
   });
 
-  test("the paywall is announced politely, not silently", async ({ page }) => {
+  test("the paywall is announced politely, not silently", async ({ page, api }) => {
     await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "free", messagesUsed: 20 }));
+    api.state.messagesUsed = 20;
     await page.goto("/chat");
     await page.getByLabel("Message").fill("hello");
     await page.getByRole("button", { name: "Send" }).click();
@@ -123,19 +120,16 @@ test.describe("things that must be announced, not just drawn", () => {
     await expect(status).toBeVisible();
   });
 
-  test("dunning and cancellation notices are in live regions", async ({ page }) => {
+  test("dunning and cancellation notices are in live regions", async ({ page, api }) => {
     await signIn(page);
-    await mockApi(
-      page,
-      new FakeApi({
-        tier: "plus",
-        status: "past_due",
-        source: "subscription",
-        graceEndsAt: "2026-09-11T00:00:00Z",
-        cancelAtPeriodEnd: true,
-        currentPeriodEnd: "2026-10-03T03:43:47Z",
-      }),
-    );
+    Object.assign(api.state, {
+      tier: "plus",
+      status: "past_due",
+      source: "subscription",
+      graceEndsAt: "2026-09-11T00:00:00Z",
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: "2026-10-03T03:43:47Z",
+    });
     await page.goto("/billing");
 
     await expect(
@@ -148,12 +142,11 @@ test.describe("things that must be announced, not just drawn", () => {
 });
 
 test.describe("the quota meter conveys its value without being seen", () => {
-  test("it exposes the count, the cap and a readable name", async ({ page }) => {
+  test.use({ fakeState: PLUS_SUBSCRIBER });
+
+  test("it exposes the count, the cap and a readable name", async ({ page, api }) => {
     await signIn(page);
-    await mockApi(
-      page,
-      new FakeApi({ tier: "plus", status: "active", source: "subscription", messagesUsed: 12 }),
-    );
+    api.state.messagesUsed = 12;
     await page.goto("/billing");
 
     const meter = page.getByRole("progressbar", { name: "Messages per day" });
@@ -166,26 +159,17 @@ test.describe("the quota meter conveys its value without being seen", () => {
 
   test("the raw quota key is never what the user reads", async ({ page }) => {
     await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "plus", status: "active", source: "subscription" }));
     await page.goto("/billing");
 
     await expect(page.getByText("messages_per_day")).toHaveCount(0);
     await expect(page.getByText("Messages per day")).toBeVisible();
   });
 
-  test("being nearly out is said in words, not only in colour", async ({ page }) => {
+  test("being nearly out is said in words, not only in colour", async ({ page, api }) => {
     // Red on a bar is invisible to a screen reader and ambiguous to roughly one
     // man in twelve looking straight at it.
     await signIn(page);
-    await mockApi(
-      page,
-      new FakeApi({
-        tier: "plus",
-        status: "active",
-        source: "subscription",
-        messagesUsed: 295, // 98% of 300
-      }),
-    );
+    api.state.messagesUsed = 295; // 98% of 300
     await page.goto("/billing");
     await expect(page.getByText(/Nearly used up/i)).toBeVisible();
   });
@@ -220,9 +204,9 @@ test.describe("keyboard and structure", () => {
     await expect(page.getByLabel("Message")).toBeVisible();
   });
 
-  test("replies land in a live region", async ({ page }) => {
+  test("replies land in a live region", async ({ page, api }) => {
     await signIn(page);
-    await mockApi(page, new FakeApi({ tier: "plus" }));
+    api.state.tier = "plus";
     await page.goto("/chat");
     await page.getByLabel("Message").fill("hello");
     await page.getByRole("button", { name: "Send" }).click();
