@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 from app.config import get_settings
 from app.models import EntitlementGrant, Subscription
-from app.services.entitlements import invalidate_entitlements, resolve_entitlements
+from app.plans import Tier
+from app.services.entitlements import (
+    Entitlements,
+    _ttl_for,
+    invalidate_entitlements,
+    resolve_entitlements,
+)
 
 
 async def make_sub(session, user_id: str, **kwargs) -> Subscription:
@@ -106,3 +112,37 @@ async def test_resolution_is_cached_until_invalidated(session):
     # ...until the write path invalidates, which is what sync does.
     await invalidate_entitlements("u8")
     assert (await resolve_entitlements(session, "u8")).tier == "pro"
+
+
+# ==========================================================================
+# the cache cannot outlive the grace boundary
+# ==========================================================================
+
+
+def _payload(seconds_left: float | None) -> Entitlements:
+    """Only the grace boundary matters to the TTL, so only it is set."""
+    when = None if seconds_left is None else datetime.now(UTC) + timedelta(seconds=seconds_left)
+    return Entitlements.model_construct(tier=Tier.PRO, grace_ends_at=when)
+
+
+def test_a_cached_entitlement_never_outlives_the_grace_window():
+    """Crossing the boundary is the passage of time, not a write, so no
+    invalidation can reach the cached entry. The TTL has to do it."""
+    configured = get_settings().entitlement_cache_ttl
+    assert _ttl_for(_payload(None)) == configured, "no window, no cap"
+    assert _ttl_for(_payload(9999)) == configured, "distant window, no cap"
+    for remaining, ttl in ((5.5, 5), (30.5, 30), (59.5, 59)):
+        assert _ttl_for(_payload(remaining)) == ttl, (
+            f"a {remaining}s window must expire before the boundary, not after it"
+        )
+
+
+def test_a_sub_second_window_is_not_cached_at_all():
+    """A TTL of 1 outlives the boundary; a TTL of 0 means *never expire* to some
+    backends. Declining to cache is the only answer wrong in neither direction."""
+    assert _ttl_for(_payload(0.5)) == 0
+
+
+def test_a_boundary_already_passed_needs_no_cap():
+    """Past the window the answer is stable again -- free, and staying free."""
+    assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
