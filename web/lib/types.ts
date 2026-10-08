@@ -17,6 +17,12 @@ export type Discount = Schemas["Discount"];
 export type SubscriptionSummary = Schemas["SubscriptionSummary"];
 export type ChatReply = Schemas["ChatReply"];
 export type ContactSalesPayload = Schemas["ContactSalesRequest"];
+export type CheckoutPayload = Schemas["CheckoutRequest"];
+/**
+ * The generator marks `interval` required because the server defaults it, but
+ * a request may omit it. "Manage billing" sends neither field.
+ */
+export type PortalPayload = Partial<Schemas["PortalRequest"]>;
 
 /**
  * The generator reads `dict[BillingInterval, PlanPrice]` as any string key. The
