@@ -6,7 +6,7 @@ without importing each other.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from app.config import get_settings
 from app.models import Subscription, SubscriptionStatus
@@ -18,7 +18,7 @@ def grace_ends_at(sub: Subscription) -> datetime | None:
     if sub.status != SubscriptionStatus.PAST_DUE.value or sub.past_due_since is None:
         return None
     started = as_utc(sub.past_due_since)
-    return started + timedelta(days=get_settings().dunning_grace_days)
+    return started + get_settings().dunning_grace
 
 
 def grace_expired(sub: Subscription, now: datetime | None = None) -> bool:

@@ -102,8 +102,7 @@ async def test_a_failed_renewal_opens_the_grace_window(session, clock, prices):
         "the window opens on our wall clock, not the test clock's simulated time"
     )
     assert failed.tier == "pro", "grace keeps paid access while the card is retried"
-    window = timedelta(days=get_settings().dunning_grace_days)
-    assert grace_ends_at(failed) == as_utc(failed.past_due_since) + window
+    assert grace_ends_at(failed) == as_utc(failed.past_due_since) + get_settings().dunning_grace
 
     ents = await resolve_entitlements(session, user_id)
     assert ents.tier == "pro"
