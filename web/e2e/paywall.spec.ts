@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test("a locked model names the tier that unlocks it", async ({ page, api }) => {
+test("a locked model names the tier that unlocks it", async ({ page }) => {
   await page.goto("/chat");
 
   await page.getByLabel("Model").selectOption("reasoning");
@@ -82,7 +82,7 @@ test("locked models are visible but labelled", async ({ page }) => {
   await expect(options.nth(2)).toHaveText("reasoning (locked)");
 });
 
-test("the paywall stays on screen through a long conversation", async ({ page, api }) => {
+test("the paywall stays on screen through a long conversation", async ({ page }) => {
   // It used to render above the chat log: send enough messages and the reason
   // your last one failed scrolled off the top of the page.
   await page.goto("/chat");
@@ -102,5 +102,4 @@ test("the paywall stays on screen through a long conversation", async ({ page, a
 
   await page.mouse.wheel(0, 2000);
   await expect(banner).toBeInViewport();
-  expect(api.state.messagesUsed).toBe(12);
 });

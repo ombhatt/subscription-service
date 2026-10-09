@@ -23,7 +23,7 @@ test("a signed-out visitor is sent to sign in, and back again after", async ({ p
   await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
 });
 
-test("the pricing page renders without a session", async ({ page, api }) => {
+test("the pricing page renders without a session", async ({ page }) => {
   // It is the pricing page: someone who has never signed up has to see it.
   await page.goto("/");
 
@@ -51,7 +51,7 @@ test("signing in reaches every component, not just the nav", async ({ page, api 
   await expect(page.getByText("1,500 messages left today")).toBeVisible();
 });
 
-test("every API call carries the bearer token", async ({ page, api }) => {
+test("every API call carries the bearer token", async ({ page }) => {
   await signIn(page);
 
   const authHeaders: string[] = [];
@@ -70,7 +70,7 @@ test("every API call carries the bearer token", async ({ page, api }) => {
   }
 });
 
-test("signing out returns you to the signed-out state", async ({ page, api }) => {
+test("signing out returns you to the signed-out state", async ({ page }) => {
   await signIn(page);
   await page.goto("/billing");
   await expect(page.locator(".who")).toHaveText(TEST_EMAIL);
@@ -81,7 +81,7 @@ test("signing out returns you to the signed-out state", async ({ page, api }) =>
   await expect(page.locator(".who")).toHaveCount(0);
 });
 
-test("the session survives a reload", async ({ page, api }) => {
+test("the session survives a reload", async ({ page }) => {
   await signIn(page);
   await page.goto("/billing");
   await expect(page.locator(".who")).toHaveText(TEST_EMAIL);
