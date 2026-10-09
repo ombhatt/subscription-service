@@ -24,11 +24,11 @@ shows up in `sales_inquiries_total`, which is what that metric is for.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 
 from fastapi import Request
 
+from app import timeutil
 from app.cache import get_cache
 from app.config import get_settings
 from app.errors import RateLimited
@@ -44,11 +44,6 @@ class Window:
     name: str
     limit: int
     seconds: int
-
-
-def _now() -> float:
-    """Indirection so tests can move the clock instead of sleeping."""
-    return time.time()
 
 
 def client_ip(request: Request) -> str:
@@ -73,7 +68,7 @@ def client_ip(request: Request) -> str:
 
 async def enforce(scope: str, identity: str, windows: tuple[Window, ...]) -> None:
     """Count this request against every window, or raise RateLimited."""
-    now = _now()
+    now = timeutil.utcnow().timestamp()
     cache = get_cache()
 
     for window in windows:

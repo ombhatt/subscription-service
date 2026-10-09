@@ -7,12 +7,13 @@ hand at 11pm.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import timeutil
 from app.auth import require_admin
 from app.db import get_session
 from app.models import EntitlementGrant, SalesInquiry, Subscription, SubscriptionAudit
@@ -184,7 +185,7 @@ async def revoke_grant(grant_id: str, session: AsyncSession = Depends(get_sessio
     if grant is None:
         raise HTTPException(status_code=404, detail="grant not found")
     if grant.revoked_at is None:
-        grant.revoked_at = datetime.now(UTC)
+        grant.revoked_at = timeutil.utcnow()
         await audit_service.record(
             session,
             user_id=grant.user_id,
@@ -231,6 +232,6 @@ async def mark_inquiry_handled(
     if inquiry is None:
         raise HTTPException(status_code=404, detail="no such inquiry")
     if inquiry.handled_at is None:
-        inquiry.handled_at = datetime.now(UTC)
+        inquiry.handled_at = timeutil.utcnow()
         await session.commit()
     return inquiry

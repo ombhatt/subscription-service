@@ -69,10 +69,10 @@ async def test_counters_are_per_user(session):
     assert state["used"] == 0
 
 
-async def test_daily_window_is_the_utc_day_containing_now(session):
+async def test_daily_window_is_the_utc_day_containing_now(session, clock):
     ents = await entitlements_for(session, "q6", "free")
-    now = utc(2026, 3, 14, 23, 59, 59)
-    assert quota.window_for(QuotaWindow.DAILY, ents, now=now) == (
+    clock.now = utc(2026, 3, 14, 23, 59, 59)
+    assert quota.window_for(QuotaWindow.DAILY, ents) == (
         utc(2026, 3, 14),
         utc(2026, 3, 15),
     )
@@ -102,11 +102,12 @@ async def test_billing_window_follows_the_subscribers_own_period(session):
     ids=["mid-month", "last-second-of-month", "first-instant-of-month", "december"],
 )
 async def test_free_users_fall_back_to_the_calendar_month(
-    session, now, month_start, next_month_start
+    session, clock, now, month_start, next_month_start
 ):
     ents = await entitlements_for(session, "q6c", "free")
     assert ents.current_period_start is None
-    assert quota.window_for(QuotaWindow.BILLING_PERIOD, ents, now=now) == (
+    clock.now = now
+    assert quota.window_for(QuotaWindow.BILLING_PERIOD, ents) == (
         month_start,
         next_month_start,
     )

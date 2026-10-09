@@ -9,7 +9,7 @@ path fails closed. That asymmetry is deliberate.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -17,6 +17,7 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app import timeutil
 from app.cache import get_cache, get_json, set_json
 from app.config import get_settings
 from app.models import EntitlementGrant, Subscription, SubscriptionStatus
@@ -177,7 +178,7 @@ def _warn_on_undrained_marks(session: Session) -> None:
 
 
 async def _active_grant_tier(session: AsyncSession, user_id: str) -> Tier | None:
-    now = datetime.now(UTC)
+    now = timeutil.utcnow()
     result = await session.execute(
         select(EntitlementGrant).where(
             EntitlementGrant.user_id == user_id,
@@ -269,7 +270,7 @@ def _ttl_for(entitlements: Entitlements) -> int:
     if not grace_until:
         return ttl
 
-    remaining = (as_utc(grace_until) - datetime.now(UTC)).total_seconds()
+    remaining = (as_utc(grace_until) - timeutil.utcnow()).total_seconds()
     if remaining <= 0:
         return ttl  # already past it; the answer is stable again
     if remaining < 1:

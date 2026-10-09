@@ -22,12 +22,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import stripe_client
+from app import stripe_client, timeutil
 from app.accounts import AccountDirectory, SupabaseAccounts
 from app.billing_provider import RemoteSubscription
 from app.config import get_settings
@@ -266,7 +265,7 @@ async def _record_orphan(
     marks = _marks(remote)
     orphaned_at = marks.get(ORPHANED_AT)
     if orphaned_at is None and not dry_run:
-        orphaned_at = datetime.now(UTC).isoformat(timespec="seconds")
+        orphaned_at = timeutil.utcnow().isoformat(timespec="seconds")
         await stripe_client.set_subscription_metadata(remote.id, {ORPHANED_AT: orphaned_at})
     report.orphaned.append(
         {
@@ -303,7 +302,7 @@ async def _notify(report: ReconcileReport, notifier: Notifier | None) -> None:
         log.exception("ORPHAN EMAIL NOT SENT: delivery failed; will retry next run")
         return
 
-    sent_at = datetime.now(UTC).isoformat(timespec="seconds")
+    sent_at = timeutil.utcnow().isoformat(timespec="seconds")
     for orphan in pending:
         sub_id = orphan["stripe_subscription_id"]
         try:

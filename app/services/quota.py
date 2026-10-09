@@ -18,13 +18,14 @@ is how some customers get six free weeks.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app import timeutil
 from app.cache import get_cache
 from app.errors import QuotaExceeded
 from app.models import UsageCounter
@@ -42,10 +43,8 @@ def _calendar_month(now: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
-def window_for(
-    window: QuotaWindow, entitlements: Entitlements, now: datetime | None = None
-) -> tuple[datetime, datetime]:
-    now = now or datetime.now(UTC)
+def window_for(window: QuotaWindow, entitlements: Entitlements) -> tuple[datetime, datetime]:
+    now = timeutil.utcnow()
     if window is QuotaWindow.DAILY:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1)
@@ -143,7 +142,7 @@ async def consume(
 
     limit = found.limit
     start, end = window_for(found.window, entitlements)
-    ttl = max(60, int((end - datetime.now(UTC)).total_seconds()))
+    ttl = max(60, int((end - timeutil.utcnow()).total_seconds()))
     try:
         used = await get_cache().incr(_counter_key(user_id, key, start), ttl)
     except Exception:
