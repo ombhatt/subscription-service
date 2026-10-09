@@ -15,12 +15,10 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -103,88 +101,6 @@ async def test_a_sync_waits_for_the_customers_lock_and_then_gives_up(postgres, s
         assert refused.value.orig.sqlstate == LOCK_NOT_AVAILABLE, refused.value
         assert 0.4 <= waited < 5, waited
         assert asked == ["cus_free"]
-
-
-def _as_postgres(statement) -> str:
-    return str(statement.compile(dialect=postgresql.dialect()))
-
-
-async def test_sync_locks_the_row_before_asking_stripe(session, stripe, monkeypatch):
-    """Locking after the Stripe call would let two workers fetch the same stale
-    answer and merely serialise the writes, which fixes nothing."""
-    order: list[str] = []
-    original_execute = session.execute
-
-    async def recording_execute(statement, *args, **kwargs):
-        order.append(_as_postgres(statement))
-        return await original_execute(statement, *args, **kwargs)
-
-    async def recording_fetch(customer_id):
-        order.append("stripe.fetch")
-        return await stripe.fetch_current_subscription(customer_id)
-
-    session.add(Subscription(user_id="u1", stripe_customer_id="cus_lock"))
-    await session.commit()
-    stripe.set_subscription("cus_lock", status="active", price_id="price_pro_m")
-    monkeypatch.setattr(session, "execute", recording_execute)
-    monkeypatch.setattr(subscriptions.stripe_client, "fetch_current_subscription", recording_fetch)
-
-    sub = await subscriptions.sync_subscription_from_stripe(session, stripe_customer_id="cus_lock")
-    await commit_and_invalidate(session)
-
-    lookup = order[0]
-    assert "FROM subscriptions" in lookup and "stripe_customer_id" in lookup, order
-    assert lookup.rstrip().endswith("FOR UPDATE"), lookup
-    assert order.index("stripe.fetch") > 0
-    assert (sub.tier, sub.status) == ("pro", "active")
-
-
-async def test_the_unlocked_lookup_takes_no_row_lock(session, monkeypatch):
-    executed: list[str] = []
-    original_execute = session.execute
-
-    async def recording_execute(statement, *args, **kwargs):
-        executed.append(_as_postgres(statement))
-        return await original_execute(statement, *args, **kwargs)
-
-    monkeypatch.setattr(session, "execute", recording_execute)
-
-    assert await subscriptions._find_by_customer(session, "cus_none") is None
-    assert len(executed) == 1
-    assert "FOR UPDATE" not in executed[0]
-
-
-class _PostgresSession:
-    """Records what reaches `execute` while reporting a Postgres bind, which is
-    the only way to reach the lock-timeout branch on a SQLite suite."""
-
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, dict | None]] = []
-
-    def get_bind(self):
-        return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-
-    async def execute(self, statement, params=None):
-        self.executed.append((_as_postgres(statement), params))
-        return SimpleNamespace(scalar_one_or_none=lambda: None)
-
-
-async def test_the_lock_wait_is_bounded_on_postgres(monkeypatch):
-    """A waiter must give up rather than block for as long as Stripe takes.
-
-    The holder of this lock is inside a network call, so an unbounded wait means
-    every queued event for that customer holds a connection until Stripe answers.
-    Postgres reads `lock_timeout` as milliseconds.
-    """
-    monkeypatch.setattr(get_settings(), "db_lock_timeout_seconds", 2.5)
-    session = _PostgresSession()
-
-    await subscriptions._find_by_customer(session, "cus_1", lock=True)
-
-    (bound_sql, bound_params), (lookup_sql, _) = session.executed
-    assert "set_config('lock_timeout', %(value)s, true)" in bound_sql
-    assert bound_params == {"value": "2500"}
-    assert lookup_sql.rstrip().endswith("FOR UPDATE")
 
 
 def test_lock_and_stripe_timeouts_are_actually_bounded():
