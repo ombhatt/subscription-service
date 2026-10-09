@@ -41,7 +41,12 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "RUF"]
+select = ["E", "F", "I", "B", "UP", "RUF", "TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "Read the clock through `timeutil.utcnow()`, which the tests can freeze."
+"datetime.datetime.utcnow".msg = "Read the clock through `timeutil.utcnow()`, which the tests can freeze."
+"time.time".msg = "Read the clock through `timeutil.utcnow()`, which the tests can freeze."
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency injection *is* a function call in an argument default.
@@ -61,6 +66,10 @@ extend-immutable-calls = [
 # The interpreter guard is deliberately "unreachable" under target-version: its
 # whole job is to fire on an older interpreter than the one we target.
 "app/__init__.py" = ["UP036"]
+# The clock ban is for app code. The seam itself reads the real clock, and
+# tests, scripts and the integration suite may too.
+"app/timeutil.py" = ["TID251"]
+"{tests,integration,scripts}/**" = ["TID251"]
 
 [tool.coverage.run]
 source = ["app"]

@@ -18,16 +18,6 @@ LEAD = {"email": "cto@acme.com"}
 
 
 @pytest.fixture
-def clock(monkeypatch):
-    """A movable clock for app.ratelimit."""
-    from app import ratelimit
-
-    now = [1_800_000_000.0]
-    monkeypatch.setattr(ratelimit, "_now", lambda: now[0])
-    return now
-
-
-@pytest.fixture
 def windows(monkeypatch):
     """Small windows, so the tests say 3-per-minute rather than 5-per-hour."""
     from app import ratelimit
@@ -54,7 +44,7 @@ async def test_requests_under_the_limit_are_accepted(client, windows, clock):
 
 
 async def test_the_request_over_the_limit_is_refused_with_retry_after(client, windows, clock):
-    clock[0] += 15  # a quarter into a minute window that started on the boundary
+    clock.advance(seconds=15)  # a quarter into a minute window that started on the boundary
     rejected = counted("rate_limit_rejections_total", scope="contact_sales", window="minute")
     for _ in range(3):
         await post(client)
@@ -88,7 +78,7 @@ async def test_the_window_reopens_once_it_has_passed(client, windows, clock):
         await post(client)
     assert (await post(client)).status_code == 429
 
-    clock[0] += 60  # into the next minute
+    clock.advance(seconds=60)  # into the next minute
 
     assert (await post(client)).status_code == 201
 
@@ -99,7 +89,7 @@ async def test_a_drip_under_the_short_limit_still_hits_the_daily_cap(client, win
     for _ in range(6):
         if (await post(client)).status_code == 201:
             accepted += 1
-        clock[0] += 60  # a fresh minute window every time
+        clock.advance(seconds=60)  # a fresh minute window every time
 
     assert accepted == 5, "the daily window is what stops this"
     assert (await post(client)).status_code == 429

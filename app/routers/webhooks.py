@@ -13,14 +13,13 @@ deliveries converge on the truth.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import stripe_client
+from app import stripe_client, timeutil
 from app.auth import require_admin
 from app.db import get_session
 from app.models import ProcessedEvent
@@ -113,7 +112,7 @@ async def stripe_webhook(
     # forming -- not how long we took, which stays flat while a queue grows.
     created = event.get("created")
     if created:
-        webhook_lag.observe(max(0.0, datetime.now(UTC).timestamp() - float(created)))
+        webhook_lag.observe(max(0.0, timeutil.utcnow().timestamp() - float(created)))
 
     log_event(
         log,
@@ -157,7 +156,7 @@ async def _mark(session: AsyncSession, event_id: str, state: str, error: str | N
         return
     row.status = state
     row.error = error
-    row.completed_at = datetime.now(UTC)
+    row.completed_at = timeutil.utcnow()
 
 
 def _short_error() -> str:

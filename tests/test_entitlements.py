@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from app.config import get_settings
 from app.models import EntitlementGrant, Subscription
@@ -42,26 +42,24 @@ async def test_incomplete_checkout_grants_nothing(session):
     assert ents.tier == "free"
 
 
-def grace() -> timedelta:
-    return timedelta(days=get_settings().dunning_grace_days)
-
-
-async def test_past_due_keeps_access_until_the_last_hour_of_grace(session):
-    past_due_since = datetime.now(UTC).replace(microsecond=0) - grace() + timedelta(hours=1)
+async def test_past_due_keeps_access_until_the_last_hour_of_grace(session, clock):
+    grace = get_settings().dunning_grace
+    past_due_since = clock.now - grace + timedelta(hours=1)
     await make_sub(session, "u3", tier="plus", status="past_due", past_due_since=past_due_since)
     ents = await resolve_entitlements(session, "u3")
     assert ents.tier == "plus"
-    assert ents.grace_ends_at == past_due_since + grace()
+    assert ents.grace_ends_at == past_due_since + grace
 
 
-async def test_past_due_loses_access_an_hour_after_grace(session):
+async def test_past_due_loses_access_an_hour_after_grace(session, clock):
     # Beyond the window, the read path revokes even if the nightly job has not
     # run yet.
-    past_due_since = datetime.now(UTC).replace(microsecond=0) - grace() - timedelta(hours=1)
+    grace = get_settings().dunning_grace
+    past_due_since = clock.now - grace - timedelta(hours=1)
     await make_sub(session, "u4", tier="plus", status="past_due", past_due_since=past_due_since)
     ents = await resolve_entitlements(session, "u4")
     assert ents.tier == "free"
-    assert ents.grace_ends_at == past_due_since + grace()
+    assert ents.grace_ends_at == past_due_since + grace
 
 
 async def test_grant_lifts_a_free_user(session):
@@ -74,14 +72,14 @@ async def test_grant_lifts_a_free_user(session):
     assert ents.source == "grant"
 
 
-async def test_expired_grant_is_ignored(session):
+async def test_expired_grant_is_ignored(session, clock):
     session.add(
         EntitlementGrant(
             user_id="u6",
             tier="pro",
             reason="trial extension",
             created_by="ops",
-            expires_at=datetime.now(UTC) - timedelta(days=1),
+            expires_at=clock.now - timedelta(days=1),
         )
     )
     await session.commit()
@@ -119,30 +117,30 @@ async def test_resolution_is_cached_until_invalidated(session):
 # ==========================================================================
 
 
-def _payload(seconds_left: float | None) -> Entitlements:
+def _payload(clock, seconds_left: float | None) -> Entitlements:
     """Only the grace boundary matters to the TTL, so only it is set."""
-    when = None if seconds_left is None else datetime.now(UTC) + timedelta(seconds=seconds_left)
+    when = None if seconds_left is None else clock.now + timedelta(seconds=seconds_left)
     return Entitlements.model_construct(tier=Tier.PRO, grace_ends_at=when)
 
 
-def test_a_cached_entitlement_never_outlives_the_grace_window():
+def test_a_cached_entitlement_never_outlives_the_grace_window(clock):
     """Crossing the boundary is the passage of time, not a write, so no
     invalidation can reach the cached entry. The TTL has to do it."""
     configured = get_settings().entitlement_cache_ttl
-    assert _ttl_for(_payload(None)) == configured, "no window, no cap"
-    assert _ttl_for(_payload(9999)) == configured, "distant window, no cap"
+    assert _ttl_for(_payload(clock, None)) == configured, "no window, no cap"
+    assert _ttl_for(_payload(clock, 9999)) == configured, "distant window, no cap"
     for remaining, ttl in ((5.5, 5), (30.5, 30), (59.5, 59)):
-        assert _ttl_for(_payload(remaining)) == ttl, (
+        assert _ttl_for(_payload(clock, remaining)) == ttl, (
             f"a {remaining}s window must expire before the boundary, not after it"
         )
 
 
-def test_a_sub_second_window_is_not_cached_at_all():
+def test_a_sub_second_window_is_not_cached_at_all(clock):
     """A TTL of 1 outlives the boundary; a TTL of 0 means *never expire* to some
     backends. Declining to cache is the only answer wrong in neither direction."""
-    assert _ttl_for(_payload(0.5)) == 0
+    assert _ttl_for(_payload(clock, 0.5)) == 0
 
 
-def test_a_boundary_already_passed_needs_no_cap():
+def test_a_boundary_already_passed_needs_no_cap(clock):
     """Past the window the answer is stable again -- free, and staying free."""
-    assert _ttl_for(_payload(-100)) == get_settings().entitlement_cache_ttl
+    assert _ttl_for(_payload(clock, -100)) == get_settings().entitlement_cache_ttl

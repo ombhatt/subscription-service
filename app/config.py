@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -124,6 +125,10 @@ class Settings(BaseSettings):
 
     dunning_grace_days: int = 7
     entitlement_cache_ttl: int = 60
+
+    @property
+    def dunning_grace(self) -> timedelta:
+        return timedelta(days=self.dunning_grace_days)
 
     @property
     def is_production(self) -> bool:

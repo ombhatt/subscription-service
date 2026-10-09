@@ -3,6 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 
+def utcnow() -> datetime:
+    """The current time, timezone-aware UTC. All app code reads the clock here.
+
+    Call it as `timeutil.utcnow()` rather than importing the name: the test
+    suite's `clock` fixture freezes time by replacing this attribute.
+    """
+    return datetime.now(UTC)
+
+
 def as_utc(value: datetime | None) -> datetime | None:
     """Normalise a database timestamp to an aware UTC datetime.
 

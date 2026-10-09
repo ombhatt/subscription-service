@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -51,7 +52,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app import auth, stripe_client
+from app import auth, stripe_client, timeutil
 from app.auth import CurrentUser, get_current_user, get_current_user_optional
 from app.billing_provider import PROVIDER_FUNCTIONS
 from app.cache import InMemoryBackend, set_cache
@@ -107,6 +108,23 @@ def fresh_cache():
     set_cache(InMemoryBackend())
     yield
     set_cache(None)
+
+
+@dataclass
+class Clock:
+    now: datetime
+
+    def advance(self, **delta: float) -> None:
+        self.now += timedelta(**delta)
+
+
+@pytest.fixture
+def clock(monkeypatch) -> Clock:
+    """Freeze the app's clock. Set `clock.now` or call `clock.advance(...)` to
+    move it. Starts on a minute boundary, so rate-limit windows open with it."""
+    frozen = Clock(datetime(2027, 1, 15, 8, tzinfo=UTC))
+    monkeypatch.setattr(timeutil, "utcnow", lambda: frozen.now)
+    return frozen
 
 
 @pytest_asyncio.fixture
