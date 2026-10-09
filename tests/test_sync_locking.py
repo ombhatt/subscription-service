@@ -1,103 +1,106 @@
 """The row lock that serialises concurrent syncs for one customer.
 
-The unit suite runs on SQLite, which silently omits `FOR UPDATE` -- that is why
-the rest of the tests still work, and also why they cannot see the lock in what
-SQLite runs. So these capture the statements the sync path hands to
-`session.execute` and compile them for Postgres, which is where the lock exists.
+The unit suite runs on SQLite, which silently omits `FOR UPDATE`, so the lock
+test here takes real locks on the Postgres named by TEST_POSTGRES_URL. It is
+marked `postgres` and skips without that URL; CI runs it in the `migrations on
+postgres` job with `pytest -m postgres`. Locally, against a throwaway server:
+
+    docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+    export TEST_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@localhost:55432/postgres
+    .venv/bin/pytest -m postgres
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import asyncio
+import os
+import time
+from uuid import uuid4
 
-from sqlalchemy.dialects import postgresql
+import pytest
+import pytest_asyncio
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
-from app.models import Subscription
+from app.db import engine_kwargs
+from app.models import Base, Subscription
 from app.services import subscriptions
 from app.services.entitlements import commit_and_invalidate
 
+POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL", "")
+LOCK_NOT_AVAILABLE = "55P03"
 
-def _as_postgres(statement) -> str:
-    return str(statement.compile(dialect=postgresql.dialect()))
+
+@pytest_asyncio.fixture
+async def postgres(request):
+    """Sessions on real Postgres, in a schema of their own that is dropped after."""
+    if not POSTGRES_URL:
+        if "postgres" in request.config.option.markexpr:
+            pytest.fail("-m postgres selected, but TEST_POSTGRES_URL is not set")
+        pytest.skip("needs TEST_POSTGRES_URL")
+    base = create_async_engine(POSTGRES_URL, poolclass=NullPool, **engine_kwargs(POSTGRES_URL))
+    schema = f"lock_test_{uuid4().hex[:12]}"
+    async with base.begin() as conn:
+        await conn.exec_driver_sql(f'create schema "{schema}"')
+    engine = base.execution_options(schema_translate_map={None: schema})
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    finally:
+        async with base.begin() as conn:
+            await conn.exec_driver_sql(f'drop schema "{schema}" cascade')
+        await base.dispose()
 
 
-async def test_sync_locks_the_row_before_asking_stripe(session, stripe, monkeypatch):
-    """Locking after the Stripe call would let two workers fetch the same stale
-    answer and merely serialise the writes, which fixes nothing."""
-    order: list[str] = []
-    original_execute = session.execute
-
-    async def recording_execute(statement, *args, **kwargs):
-        order.append(_as_postgres(statement))
-        return await original_execute(statement, *args, **kwargs)
+@pytest.mark.postgres
+async def test_a_sync_waits_for_the_customers_lock_and_then_gives_up(postgres, stripe, monkeypatch):
+    """While one sync holds a customer's row, a second sync for that customer
+    waits, then fails with Postgres's lock timeout rather than queueing behind
+    the holder's Stripe call -- and asks Stripe nothing, because the lock comes
+    first. Other customers, and plain reads of the held row, are not blocked."""
+    monkeypatch.setattr(get_settings(), "db_lock_timeout_seconds", 0.5)
+    asked: list[str] = []
 
     async def recording_fetch(customer_id):
-        order.append("stripe.fetch")
+        asked.append(customer_id)
         return await stripe.fetch_current_subscription(customer_id)
 
-    session.add(Subscription(user_id="u1", stripe_customer_id="cus_lock"))
-    await session.commit()
-    stripe.set_subscription("cus_lock", status="active", price_id="price_pro_m")
-    monkeypatch.setattr(session, "execute", recording_execute)
     monkeypatch.setattr(subscriptions.stripe_client, "fetch_current_subscription", recording_fetch)
+    stripe.set_subscription("cus_held", subscription_id="sub_held")
+    stripe.set_subscription("cus_free", subscription_id="sub_free")
+    async with postgres() as seed:
+        seed.add_all(
+            [
+                Subscription(user_id="u_held", stripe_customer_id="cus_held"),
+                Subscription(user_id="u_free", stripe_customer_id="cus_free"),
+            ]
+        )
+        await seed.commit()
 
-    sub = await subscriptions.sync_subscription_from_stripe(session, stripe_customer_id="cus_lock")
-    await commit_and_invalidate(session)
+    async with postgres() as holder, postgres() as waiter, postgres() as other:
+        assert await subscriptions._find_by_customer(holder, "cus_held", lock=True)
 
-    lookup = order[0]
-    assert "FROM subscriptions" in lookup and "stripe_customer_id" in lookup, order
-    assert lookup.rstrip().endswith("FOR UPDATE"), lookup
-    assert order.index("stripe.fetch") > 0
-    assert (sub.tier, sub.status) == ("pro", "active")
+        assert await subscriptions._find_by_customer(other, "cus_held")
+        free = await subscriptions.sync_subscription_from_stripe(
+            other, stripe_customer_id="cus_free"
+        )
+        await commit_and_invalidate(other)
+        assert (free.tier, free.status) == ("pro", "active")
 
+        started = time.monotonic()
+        with pytest.raises(DBAPIError) as refused:
+            await asyncio.wait_for(
+                subscriptions.sync_subscription_from_stripe(waiter, stripe_customer_id="cus_held"),
+                timeout=5,
+            )
+        waited = time.monotonic() - started
 
-async def test_the_unlocked_lookup_takes_no_row_lock(session, monkeypatch):
-    executed: list[str] = []
-    original_execute = session.execute
-
-    async def recording_execute(statement, *args, **kwargs):
-        executed.append(_as_postgres(statement))
-        return await original_execute(statement, *args, **kwargs)
-
-    monkeypatch.setattr(session, "execute", recording_execute)
-
-    assert await subscriptions._find_by_customer(session, "cus_none") is None
-    assert len(executed) == 1
-    assert "FOR UPDATE" not in executed[0]
-
-
-class _PostgresSession:
-    """Records what reaches `execute` while reporting a Postgres bind, which is
-    the only way to reach the lock-timeout branch on a SQLite suite."""
-
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, dict | None]] = []
-
-    def get_bind(self):
-        return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-
-    async def execute(self, statement, params=None):
-        self.executed.append((_as_postgres(statement), params))
-        return SimpleNamespace(scalar_one_or_none=lambda: None)
-
-
-async def test_the_lock_wait_is_bounded_on_postgres(monkeypatch):
-    """A waiter must give up rather than block for as long as Stripe takes.
-
-    The holder of this lock is inside a network call, so an unbounded wait means
-    every queued event for that customer holds a connection until Stripe answers.
-    Postgres reads `lock_timeout` as milliseconds.
-    """
-    monkeypatch.setattr(get_settings(), "db_lock_timeout_seconds", 2.5)
-    session = _PostgresSession()
-
-    await subscriptions._find_by_customer(session, "cus_1", lock=True)
-
-    (bound_sql, bound_params), (lookup_sql, _) = session.executed
-    assert "set_config('lock_timeout', %(value)s, true)" in bound_sql
-    assert bound_params == {"value": "2500"}
-    assert lookup_sql.rstrip().endswith("FOR UPDATE")
+        assert refused.value.orig.sqlstate == LOCK_NOT_AVAILABLE, refused.value
+        assert 0.4 <= waited < 5, waited
+        assert asked == ["cus_free"]
 
 
 def test_lock_and_stripe_timeouts_are_actually_bounded():

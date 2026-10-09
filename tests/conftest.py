@@ -75,6 +75,10 @@ def pytest_configure(config):
         "markers",
         "allow_undrained: this test commits under a marking write on purpose",
     )
+    config.addinivalue_line(
+        "markers",
+        "postgres: takes real row locks on TEST_POSTGRES_URL; skipped without it",
+    )
 
 
 @pytest.fixture(autouse=True)
