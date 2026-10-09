@@ -78,11 +78,10 @@ async def test_daily_window_is_the_utc_day_containing_now(session, clock):
     )
 
 
-async def test_billing_window_follows_the_subscribers_own_period(session):
+async def test_billing_window_follows_the_subscribers_own_period(session, clock):
     """A monthly cap must reset on the renewal date, not on the 1st."""
-    now = datetime.now(UTC)
-    period_start = now - timedelta(days=10)
-    period_end = now + timedelta(days=20)
+    period_start = clock.now - timedelta(days=10)
+    period_end = clock.now + timedelta(days=20)
     ents = (await entitlements_for(session, "q6b", "pro")).model_copy(
         update={"current_period_start": period_start, "current_period_end": period_end}
     )
