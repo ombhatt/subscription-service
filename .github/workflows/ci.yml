@@ -55,7 +55,8 @@ jobs:
     # The test suite runs on SQLite for speed, so this is the only place the
     # schema meets the engine it will actually run on. Worth its own job:
     # a migration that works on SQLite and fails on Postgres is a deploy outage.
-    # Pinned to the major version Supabase actually runs (17), not whatever
+    # It is also where the tests marked `postgres` run, since SQLite has no row
+    # locks. Pinned to the major version Supabase actually runs (17), not whatever
     # was current when this was written.
     services:
       postgres:
@@ -78,10 +79,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements.lock
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
 
       - name: Install
-        run: pip install -r requirements.lock
+        run: pip install -r requirements.lock -r requirements-dev.txt
 
       - name: Upgrade, roll back, upgrade again
         env:
@@ -90,6 +93,14 @@ jobs:
           alembic upgrade head
           alembic downgrade base
           alembic upgrade head
+
+      # Each test builds its tables in a schema of its own and drops it, so
+      # this neither needs the migrated schema nor disturbs the steps below.
+      # Selecting the marker without the URL fails rather than skipping.
+      - name: Row locks and lock timeouts
+        env:
+          TEST_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/subscriptions
+        run: pytest -q -m postgres
 
       # Migration 0006 lets the service ask which user ids have no account.
       # What must never regress: it answers only app_service, and it answers

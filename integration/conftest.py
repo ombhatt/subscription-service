@@ -14,12 +14,14 @@ and on pull requests that touch the service.
     make testclock          # or: .venv/bin/pytest integration/ -v
 
 Database: SQLite in a temporary file by default. With INTEGRATION_DATABASE_URL
-set (always, in CI) it is the Supabase project's Postgres instead, so row locks,
-`lock_timeout`, JSONB and the connection pooler are exercised for real rather
-than approximated. Each test gets its own `ci_<epoch>_<hex>` schema, dropped at
-teardown, and the credential must be the scoped `ci_runner` role from
-scripts/ci_db_role.sql -- never `postgres`, because that project also holds the
-service's real data.
+set (always, in CI) it is the Supabase project's Postgres instead, so JSONB, the
+sync path's row-lock statements and the connection pooler run for real rather
+than approximated. No test here contends for a lock; the lock wait and its
+`lock_timeout` are proven in tests/test_sync_locking.py (`pytest -m postgres`,
+run by CI's `migrations on postgres` job). Each test gets its own
+`ci_<epoch>_<hex>` schema, dropped at teardown, and the credential must be the
+scoped `ci_runner` role from scripts/ci_db_role.sql -- never `postgres`, because
+that project also holds the service's real data.
 """
 
 from __future__ import annotations
