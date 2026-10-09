@@ -12,13 +12,13 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import stripe_client
+from app import stripe_client, timeutil
 from app.billing_provider import RemotePrice, RemoteSubscription
 from app.config import get_settings
 from app.errors import BillingError
@@ -386,7 +386,7 @@ def _write(sub: Subscription, state: MirroredState) -> None:
     # depends on what the row said before, so it is decided here, not projected.
     if state.status is SubscriptionStatus.PAST_DUE:
         if sub.past_due_since is None:
-            sub.past_due_since = datetime.now(UTC)
+            sub.past_due_since = timeutil.utcnow()
     else:
         sub.past_due_since = None
 
@@ -408,7 +408,7 @@ async def mark_disputed(
     sub = await _find_by_customer(session, stripe_customer_id)
     if sub is None:
         return None
-    sub.disputed_at = datetime.now(UTC)
+    sub.disputed_at = timeutil.utcnow()
     await audit.record(
         session,
         user_id=sub.user_id,
@@ -520,7 +520,7 @@ def _checkout_idempotency_key(**params: object) -> str:
     user_id = params["user_id"]
     payload = json.dumps(params, sort_keys=True, default=str)
     digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
-    return f"checkout:{user_id}:{datetime.now(UTC):%Y-%m-%d}:{digest}"
+    return f"checkout:{user_id}:{timeutil.utcnow():%Y-%m-%d}:{digest}"
 
 
 async def schedule_cancellation(session: AsyncSession, *, user_id: str) -> Subscription:

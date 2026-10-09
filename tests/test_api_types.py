@@ -8,12 +8,11 @@ pieces of it agree with plans.py.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from app.config import get_settings
 from app.models import Subscription, SubscriptionStatus
 from app.plans import CATALOG, Tier
 from app.schemas import Features
@@ -66,7 +65,7 @@ async def test_entitlements_survive_the_cache_round_trip(session):
     ) == (
         datetime(2026, 9, 1, tzinfo=UTC),
         datetime(2026, 10, 1, tzinfo=UTC),
-        datetime(2026, 9, 30, 12, tzinfo=UTC) + timedelta(days=get_settings().dunning_grace_days),
+        datetime(2026, 10, 7, 12, tzinfo=UTC),  # past_due_since + the suite's 7-day grace
     )
 
 
