@@ -125,9 +125,11 @@ export default function ChatPage() {
         </Banner>
       )}
 
-      {/* role=alert so it is announced, not merely drawn, and one wrapper for
-          both kinds so the sticky offset is the same either way. */}
-      <div className="paywall" ref={paywall} role="alert">
+      {/* An always-present live region, so the paywall is announced when it
+          appears rather than merely drawn. role=status: being refused is not an
+          error, so it waits for a pause instead of interrupting. One wrapper for
+          both kinds keeps the sticky offset the same either way. */}
+      <div className="paywall" ref={paywall} role="status">
       {blocked?.error === "feature_not_entitled" && (
         <Banner tone="warn">
           <div className="row">

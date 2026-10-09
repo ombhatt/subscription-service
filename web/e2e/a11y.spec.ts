@@ -116,8 +116,10 @@ test.describe("things that must be announced, not just drawn", () => {
     await page.getByLabel("Message").fill("hello");
     await page.getByRole("button", { name: "Send" }).click();
 
-    const status = page.getByRole("status").filter({ hasText: /Daily limit reached/ });
-    await expect(status).toBeVisible();
+    const paywall = { hasText: /Daily limit reached/ };
+    await expect(page.getByRole("status").filter(paywall)).not.toHaveCount(0);
+    // An alert around it would make it assertive whatever the inner banner says.
+    await expect(page.getByRole("alert").filter(paywall)).toHaveCount(0);
   });
 
   test("dunning and cancellation notices are in live regions", async ({ page, api }) => {
