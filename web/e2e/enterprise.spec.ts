@@ -9,7 +9,7 @@
 
 import AxeBuilder from "@axe-core/playwright";
 
-import { PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
+import { PRO_SUBSCRIBER, expect, planCard, signIn, test } from "./fixtures";
 
 test.describe("the Enterprise card", () => {
   test.beforeEach(async ({ page }) => {
@@ -19,25 +19,25 @@ test.describe("the Enterprise card", () => {
   test("shows a custom price, not a free one", async ({ page }) => {
     // Free and Enterprise are both unpurchasable; pricing Enterprise at zero
     // would be the single worst thing this page could say.
-    const card = page.locator(".card.plan").filter({ hasText: "Enterprise" });
+    const card = planCard(page, "Enterprise");
     await expect(card).toBeVisible();
     await expect(card.locator(".price-now")).toHaveText("Custom");
   });
 
   test("does not render unlimited context as zero", async ({ page }) => {
-    const card = page.locator(".card.plan").filter({ hasText: "Enterprise" });
-    const context = card.locator("li").filter({ has: page.getByText("context", { exact: true }) });
-    await expect(context.locator("span").last()).toHaveText("Unlimited");
+    const card = planCard(page, "Enterprise");
+    const context = card.getByRole("listitem").filter({ hasText: /^context/ });
+    await expect(context).toHaveText(/^context\s*Unlimited$/);
   });
 
   test("offers a conversation instead of a checkout", async ({ page }) => {
-    const card = page.locator(".card.plan").filter({ hasText: "Enterprise" });
+    const card = planCard(page, "Enterprise");
     await expect(card.getByRole("button", { name: "Contact sales" })).toBeVisible();
     await expect(card.getByRole("button", { name: /Upgrade to/ })).toHaveCount(0);
   });
 
   test("the free plan still reads as free", async ({ page }) => {
-    const card = page.locator(".card.plan").filter({ hasText: "Free" }).first();
+    const card = planCard(page, "Free");
     await expect(card.locator(".price-now")).toHaveText("Free");
   });
 });

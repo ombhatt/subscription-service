@@ -27,7 +27,7 @@ test("an unlimited quota draws no bar", async ({ page, api }) => {
   await expect(page.locator(".meter-label .value", { hasText: "unlimited" })).toBeVisible();
   await expect(page.getByText("No cap on this plan")).toBeVisible();
   // Two quotas, but only the capped one gets a meter.
-  await expect(page.locator(".meter")).toHaveCount(1);
+  await expect(page.getByRole("progressbar")).toHaveCount(1);
 });
 
 test("a failed payment explains the grace window", async ({ page, api }) => {
