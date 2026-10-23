@@ -101,18 +101,17 @@ jobs:
       - uses: actions/checkout@v7
         if: steps.key.outputs.run == 'true'
 
-      - uses: actions/setup-python@v7
+      - uses: astral-sh/setup-uv@v10
         if: steps.key.outputs.run == 'true'
         with:
+          version: "0.13.5"
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.lock
-            requirements-dev.txt
+          enable-cache: true
+          activate-environment: true
 
       - name: Install
         if: steps.key.outputs.run == 'true'
-        run: pip install -r requirements.lock -r requirements-dev.txt
+        run: uv sync --locked
 
       - name: Lifecycle against real Stripe objects
         if: steps.key.outputs.run == 'true'

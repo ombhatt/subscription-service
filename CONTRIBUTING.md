@@ -84,31 +84,23 @@ weeks, and nobody opens a pull request to tell you that. Three jobs:
 
 | job | what it checks |
 |---|---|
-| `dependency audit` | `pip-audit` against `requirements.lock`, `npm audit` against `web/` |
+| `dependency audit` | `pip-audit` against the runtime tree in `uv.lock`, `npm audit` against `web/` |
 | `image scan` | Trivy against the built API image — the OS packages we inherit from the base image, which nothing here pins |
 | `code scanning` | CodeQL over Python and TypeScript; results land in the Security tab |
 
 Dependabot (`.github/dependabot.yml`) is the other half — it keeps things
 current, weekly, grouped so patch bumps arrive as one reviewable pull request
-rather than five rubber-stamped ones. It covers pip, npm, GitHub Actions and
+rather than five rubber-stamped ones. It covers uv, npm, GitHub Actions and
 both Dockerfiles.
 
-The lock is deliberately named `requirements.lock` and **not** `.txt`, so
-Dependabot does not parse it. Dependabot's pip ecosystem reads a flat `.txt`
-as a list of *direct* requirements with no notion of the constraints between
-them; pointed at a generated lock it proposes single-package bumps that cannot
-resolve — it offered `pydantic-core 2.48.0` while `pydantic` pins
-`pydantic-core==2.46.5` exactly. So the lock stays a generated artefact:
-Dependabot manages `requirements.txt` and `requirements-dev.txt`, `make lock`
-regenerates the whole tree coherently, and `pip-audit` covers the lock for
-advisories daily.
-
-That is also why `requirements-dev.txt` no longer does `-r requirements.lock`.
-Install both explicitly:
-
-```bash
-pip install -r requirements.lock -r requirements-dev.txt
-```
+Python dependencies live in `pyproject.toml` and resolve into `uv.lock`, a
+real lockfile: Dependabot's uv ecosystem re-resolves the whole tree for each
+bump, so its version and security updates reach transitive pins too. The
+previous lock was a flat freeze (`requirements.lock`) that Dependabot could
+not resolve as a whole -- it proposed `pydantic-core 2.48.0` while `pydantic`
+pinned `pydantic-core==2.46.5` exactly -- so it was hidden from Dependabot, and
+transitive advisories (aiohttp, certifi) then sat unfixed until someone ran
+`make lock` by hand.
 
 Locally:
 
@@ -116,21 +108,24 @@ Locally:
 make audit                    # both ecosystems
 ```
 
-Auditing the **lock** rather than `requirements.txt` is deliberate — the latter
-holds floors, which is not what runs anywhere.
+Auditing the **lock** rather than `pyproject.toml` is deliberate — the latter
+holds floors, which is not what runs anywhere. The audit reads the runtime tree
+(`uv export --no-dev`, hashed), so dev tools that never ship cannot fail it.
 
 ### Changing a dependency
 
-`requirements.txt` holds the direct dependencies and their floors.
-`requirements.lock` holds the full transitive tree at exact versions and is what
-the images and CI actually install. It is generated — never hand-edit it, and
-never let a bot edit it either.
+`pyproject.toml` holds the direct dependencies and their floors, and the `dev`
+group for test and lint tools. `uv.lock` holds the full transitive tree at exact
+versions, hashed, and is what the image and CI install. It is generated — never
+hand-edit it. Dependabot's PRs regenerate it, and so does:
 
 ```bash
-# edit requirements.txt, then
-make lock
+uv add 'somelib>=1.2'         # or edit pyproject.toml, then `make lock`
 make test
 ```
+
+CI runs `uv sync --locked`, which fails if `pyproject.toml` changed without the
+lock.
 
 Commit both. A lock bump is a code change — the suite is what says whether it is
 a safe one, and reviewing the lock diff is how you notice that a patch release

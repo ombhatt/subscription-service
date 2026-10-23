@@ -9,6 +9,5 @@ if sys.version_info < (3, 11):
         f"This service requires Python 3.11+, but is running {sys.version.split()[0]} "
         f"from {sys.executable}.\n"
         "Recreate the virtualenv with a newer interpreter, for example:\n"
-        "    rm -rf .venv && python3.11 -m venv .venv && "
-        ".venv/bin/pip install -r requirements.lock -r requirements-dev.txt"
+        "    rm -rf .venv && uv sync --frozen --python 3.11"
     )

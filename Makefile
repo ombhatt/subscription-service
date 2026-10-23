@@ -21,13 +21,11 @@ services-down:
 	brew services stop postgresql@16
 	brew services stop redis
 
-install:
-	$(PYTHON) -m venv .venv
-	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r requirements.lock -r requirements-dev.txt
+install:       ## .venv exactly as uv.lock says, dev tools included (needs uv)
+	uv sync --frozen --python $(PYTHON)
 
-lock:          ## regenerate requirements.lock after editing requirements.txt
-	PYTHON=$(PYTHON) ./scripts/lock.sh
+lock:          ## re-resolve uv.lock after editing dependencies in pyproject.toml
+	uv lock
 
 migrate:
 	.venv/bin/alembic upgrade head
@@ -63,12 +61,12 @@ api-types:     ## regenerate the web app's API types after changing a response m
 lint:
 	.venv/bin/ruff check app alembic tests scripts integration
 
-# Installs pip-audit into .venv on first use -- about 28 transitive packages,
-# which is why it is not in requirements-dev.txt. CI installs it per-run instead.
+# pip-audit runs through uvx, so its ~28 packages never enter .venv. It audits
+# the runtime tree as uv.lock pins it, dev tools excluded, the same as CI.
 audit:         ## known vulnerabilities in what actually ships
-	@echo "--- python (requirements.lock) ---"
-	@.venv/bin/pip install -q pip-audit 2>/dev/null || true
-	@.venv/bin/pip-audit -r requirements.lock --progress-spinner=off || true
+	@echo "--- python (uv.lock, runtime) ---"
+	@uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/runtime-requirements.txt -q
+	@uvx pip-audit -r /tmp/runtime-requirements.txt --require-hashes --disable-pip --progress-spinner=off || true
 	@echo "--- javascript (web) ---"
 	@cd web && npm audit --audit-level=high || true
 
