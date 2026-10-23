@@ -341,19 +341,20 @@ if a later one deletes it.
 
 ## Dependencies are pinned
 
-`requirements.txt` says which libraries this depends on and the floor for each.
-`requirements.lock` says what actually gets installed, transitive dependencies
-included, and is what the image and CI both read — so two builds of the same
-commit install the same code.
+`pyproject.toml` says which libraries this depends on and the floor for each.
+`uv.lock` says what actually gets installed, transitive dependencies included,
+each with its hash, and is what the image and CI both read — so two builds of
+the same commit install the same code.
 
 ```bash
-make lock        # after editing requirements.txt
+make lock        # after editing dependencies in pyproject.toml
 make test        # a lock bump is a code change; the tests say whether it is safe
 ```
 
-The image installs the lock with `--no-deps` and then runs `pip check`: if the
-lock is incomplete, the build fails there rather than the container failing on
-an import in production.
+The image installs with `uv sync --frozen --no-dev`, which takes the lock as it
+is and verifies every hash, then runs `uv pip check`: if the lock is incomplete,
+the build fails there rather than the container failing on an import in
+production.
 
 The base images are pinned to a minor version (`python:3.12-slim-bookworm`,
 `node:22-slim`), not a digest. Pinning digests is stricter and worth doing once

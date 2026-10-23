@@ -9,23 +9,24 @@
 # 1. Grouping only applies to the update-types you list. Grouping minor and
 #    patch leaves every major to arrive on its own, which is how one config
 #    change became thirteen PRs.
-# 2. Dependabot's pip ecosystem reads a flat .txt as a list of *direct*
-#    requirements. Pointed at a generated lock it proposes single-package
-#    bumps that ignore the constraints between them -- it offered
-#    pydantic-core 2.48.0 while pydantic pins pydantic-core==2.46.5 exactly,
-#    which is unresolvable and would have been reproposed forever. So the lock
-#    is named requirements.lock, which Dependabot does not parse, and stays a
-#    generated artefact: `make lock` regenerates the whole tree coherently,
-#    and pip-audit covers it for advisories.
+# 2. A lock has to be one Dependabot resolves as a whole. Its pip ecosystem
+#    read the old flat freeze as a list of *direct* requirements and proposed
+#    single-package bumps that ignored the constraints between them -- it
+#    offered pydantic-core 2.48.0 while pydantic pins pydantic-core==2.46.5
+#    exactly. Hiding that lock from it (requirements.lock) fixed the noise but
+#    meant transitive pins only moved when someone ran `make lock`, and the
+#    nightly Security scan sat red for days on aiohttp and certifi advisories
+#    nobody had proposed. uv.lock is a real lockfile: the uv ecosystem
+#    re-resolves it, so version and security updates cover the whole tree.
 # 3. Packages that must move together have to be grouped together, or
 #    Dependabot splits them and breaks the peer constraint.
 
 version: 2
 updates:
-  # Direct dependencies and their floors, plus the dev tooling. Everything in
-  # one group: a bump here is followed by `make lock` and a full suite run, so
-  # there is no value in splitting it across PRs.
-  - package-ecosystem: pip
+  # pyproject.toml and uv.lock: the runtime tree and the dev group together.
+  # Everything in one group: each bump re-resolves the whole lock and runs the
+  # full suite, so there is no value in splitting it across PRs.
+  - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly

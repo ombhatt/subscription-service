@@ -2,27 +2,33 @@
 # reconciliation job with the same code and the same dependency tree the web
 # process is running, which is the point of not having a separate one.
 #
-# Two stages so the compiler and the pip cache do not ship to production. The
-# runtime stage receives a finished virtualenv and nothing else.
+# Two stages so uv and its cache do not ship to production. The runtime stage
+# receives a finished virtualenv and nothing else.
 
 # ---------------------------------------------------------------- build ----
 FROM python:3.12-slim-bookworm AS builder
 
+# The same uv version that wrote uv.lock (pyproject.toml's required-version).
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
+
 # Everything here has a manylinux wheel, so no toolchain is installed on
 # purpose: if a wheel ever goes missing the build fails loudly rather than
-# quietly growing a compiler into the image.
-ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# quietly growing a compiler into the image. The base image's interpreter is
+# the one the runtime stage has too, so uv must not download another.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_NO_CACHE=1 \
+    UV_LINK_MODE=copy
 
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
+WORKDIR /build
 # Copied alone so the dependency layer is cached until the lock itself changes.
-COPY requirements.lock ./
-# --no-deps is deliberate: the lock is meant to be the complete transitive
-# tree, so letting pip resolve again could pull in something the lock does not
-# name. `pip check` then verifies that claim -- if the lock is missing a
-# dependency, the build fails here instead of the container failing on import.
-RUN pip install --no-deps -r requirements.lock && pip check
+COPY pyproject.toml uv.lock ./
+# --frozen installs exactly what uv.lock says, verifying every hash, and never
+# re-resolves; CI's `uv sync --locked` is what fails if pyproject.toml has
+# drifted from the lock. --no-dev leaves the test and lint tools out. `uv pip check` then confirms the tree is
+# complete, so a missing dependency fails the build, not the container's import.
+RUN uv sync --frozen --no-dev --python /usr/local/bin/python \
+ && uv pip check --python /opt/venv/bin/python
 
 # -------------------------------------------------------------- runtime ----
 FROM python:3.12-slim-bookworm AS runtime

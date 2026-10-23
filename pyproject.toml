@@ -3,6 +3,10 @@ name = "subscription-service"
 version = "0.1.0"
 description = "Flat-price Free/Plus/Pro subscriptions on Stripe Billing"
 requires-python = ">=3.11"
+# The libraries this service depends on directly, with the floor for each.
+# This records *intent*; uv.lock records what actually gets installed,
+# transitive dependencies and all, and is what every build reads. Change a
+# floor here, then `make lock` and run the suite.
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -14,18 +18,33 @@ dependencies = [
     "redis>=5.2",
     "stripe>=11.1",
     "python-dotenv>=1.0",
-    "pyjwt[crypto]>=2.10",
+    # 2.14 and older: PYSEC-2026-4141 and PYSEC-2026-4183; 2.13 and older: token forgery.
+    "pyjwt[crypto]>=2.15",
     "prometheus-client>=0.21",
+    # Feature flags. Evaluation is local against an in-memory snapshot -- the
+    # only network call is the background refresh -- so this does not sit in
+    # the request path. Brings aiohttp and its tree with it.
+    "growthbook>=3.1.1",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+# Test and lint tooling. Never in the image: `uv sync --no-dev` leaves it out.
 dev = [
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
-    "httpx>=0.27",
-    "aiosqlite>=0.20",
-    "ruff>=0.7",
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "httpx>=0.28",
+    "aiosqlite>=0.22",
+    "coverage>=7.16",
+    "ruff>=0.16",
 ]
+
+[tool.uv]
+# An application, not a library: install its dependencies, never build or
+# install the project itself.
+package = false
+# The lockfile format follows the uv that wrote it. CI and the image pin the
+# same version (see .github/workflows and the Dockerfile).
+required-version = ">=0.13.5"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

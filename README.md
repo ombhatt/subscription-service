@@ -24,17 +24,19 @@ worse than a free user getting an extra hour of Pro.
 
 ## Quick start
 
-You need Python 3.11+, Node 20+, a [Stripe](https://dashboard.stripe.com) test
-account, and a [Supabase](https://supabase.com/dashboard) project. Supabase is
-not optional: it provides authentication, and its Postgres is what the service
-runs on, so one signup covers both.
+You need Python 3.11+, [uv](https://docs.astral.sh/uv/) 0.13.5+, Node 20+, a
+[Stripe](https://dashboard.stripe.com) test account, and a
+[Supabase](https://supabase.com/dashboard) project. Supabase is not optional:
+it provides authentication, and its Postgres is what the service runs on, so
+one signup covers both.
 
-On macOS, name the interpreter explicitly. A bare `python3` is often an old
+Name the interpreter explicitly. On macOS a bare `python3` is often an old
 system build, and the failure is an unhelpful `unsupported operand type(s) for |`
-from inside Pydantic rather than anything mentioning versions.
+from inside Pydantic rather than anything mentioning versions. `uv sync` builds
+`.venv` exactly as `uv.lock` pins it, dev tools included.
 
 ```bash
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements.lock -r requirements-dev.txt
+uv sync --frozen --python 3.11      # or: make install
 cp .env.example .env
 ```
 
@@ -676,7 +678,7 @@ carries `mismatched` as a field.
 - [x] **Test Clocks** — renewal, dunning, cancel-at-boundary, trial conversion
       and mid-cycle upgrade, against real Stripe objects
 - [x] **Deployable** — one image for the API, the migrations and both jobs;
-      dependencies pinned in `requirements.lock`; CI builds both images and
+      dependencies pinned and hashed in `uv.lock`; CI builds both images and
       smoke-tests them. See [DEPLOY.md](DEPLOY.md).
 - [ ] **Re-enable email confirmation** in Supabase if you disabled it. Without
       it anyone can register an address they do not own, and that address ends
