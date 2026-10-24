@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import Banner from "@/components/Banner";
+import { safeNext } from "@/lib/redirect";
 import { supabase } from "@/lib/supabase";
 
 type Mode = "sign-in" | "sign-up";
@@ -11,7 +12,7 @@ type Mode = "sign-in" | "sign-up";
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get("next") || "/billing";
+  const next = safeNext(params.get("next"));
 
   const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
