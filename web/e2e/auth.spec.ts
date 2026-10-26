@@ -89,3 +89,28 @@ test("the session survives a reload", async ({ page }) => {
   await page.reload();
   await expect(page.locator(".who")).toHaveText(TEST_EMAIL);
 });
+
+test("a next= that leaves this origin is not followed after sign-in", async ({ page }) => {
+  // Anyone can write a /login link. Followed as-is, `javascript:` would run in
+  // this origin with the session cookie readable, the moment the victim signed in.
+  const dialogs: string[] = [];
+  page.on("dialog", async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+
+  for (const next of [
+    "javascript:alert(document.cookie)",
+    "https://evil.example/",
+    "//evil.example",
+    // Passes the origin check, then resolves to //evil.example.
+    "/.//evil.example",
+  ]) {
+    await page.context().clearCookies();
+    await signIn(page, { loginUrl: `/login?next=${encodeURIComponent(next)}` });
+
+    expect(new URL(page.url()).origin).toBe("http://localhost:3000");
+    expect(new URL(page.url()).pathname).toBe("/billing");
+  }
+  expect(dialogs).toEqual([]);
+});
