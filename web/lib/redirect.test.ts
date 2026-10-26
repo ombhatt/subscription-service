@@ -31,4 +31,23 @@ describe("safeNext", () => {
   ])("refuses %j", (next) => {
     expect(safeNext(next)).toBe("/billing");
   });
+
+  // Each passes the origin check on the way in, then resolves to a path that
+  // starts with `//` once the dot segments are removed -- another host, to the
+  // browser that receives it.
+  it.each([
+    "/.//evil.example",
+    "/./\\evil.example",
+    "/%2e//evil.example",
+    "/.%2e//evil.example",
+    "/x/..//evil.example",
+    "/././/evil.example",
+  ])("refuses %j, which resolves to //evil.example", (next) => {
+    expect(safeNext(next)).toBe("/billing");
+  });
+
+  it("keeps a path whose dot segments resolve on this origin", () => {
+    expect(safeNext("/x/../chat")).toBe("/chat");
+    expect(safeNext("/%2F%2Fevil.example")).toBe("/%2F%2Fevil.example");
+  });
 });

@@ -24,5 +24,9 @@ export function safeNext(next: string | null | undefined, fallback = "/billing")
     return fallback;
   }
   if (url.origin !== PLACEHOLDER) return fallback;
-  return `${url.pathname}${url.search}${url.hash}`;
+  // Check what is returned as well as what came in: dot segments can leave a
+  // path that starts with `//` ("/.//evil.com" resolves to "//evil.com"), which
+  // the browser then reads as another host.
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  return new URL(path, PLACEHOLDER).origin === PLACEHOLDER ? path : fallback;
 }

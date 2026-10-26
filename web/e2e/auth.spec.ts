@@ -99,7 +99,13 @@ test("a next= that leaves this origin is not followed after sign-in", async ({ p
     await dialog.dismiss();
   });
 
-  for (const next of ["javascript:alert(document.cookie)", "https://evil.example/", "//evil.example"]) {
+  for (const next of [
+    "javascript:alert(document.cookie)",
+    "https://evil.example/",
+    "//evil.example",
+    // Passes the origin check, then resolves to //evil.example.
+    "/.//evil.example",
+  ]) {
     await page.context().clearCookies();
     await signIn(page, { loginUrl: `/login?next=${encodeURIComponent(next)}` });
 
