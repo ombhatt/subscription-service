@@ -271,7 +271,18 @@ async def sync_subscription_from_stripe(
             if sub is None:
                 raise
             sub.stripe_customer_id = stripe_customer_id
+            # Flushed so the lookup by customer id below finds this row.
+            await session.flush()
             log.info("lost the create race for %s; using the existing row", stripe_customer_id)
+
+        # Lock the row -- ours, or one another event created a moment ago -- and
+        # re-read Stripe under that lock. The read above predates it, so if a
+        # concurrent sync created the row from a newer answer, writing ours
+        # would overwrite newer state with older: the lost update the
+        # lock-first order exists to prevent. One extra call, on a customer's
+        # first event only.
+        sub = await _find_by_customer(session, stripe_customer_id, lock=True) or sub
+        remote = None
 
     before = audit.snapshot(sub)
     before_fingerprint = _fingerprint(sub)
