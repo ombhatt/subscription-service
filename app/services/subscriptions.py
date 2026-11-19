@@ -8,9 +8,13 @@ what makes duplicate delivery a no-op and out-of-order delivery harmless.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,7 +28,7 @@ from app.config import get_settings
 from app.errors import BillingError
 from app.models import Subscription, SubscriptionStatus
 from app.observability import event as log_event
-from app.observability import subscription_transitions
+from app.observability import subscription_transitions, sync_rejections
 from app.plans import CATALOG, BillingInterval, Tier, price_catalog, price_id_for
 from app.services import audit
 from app.services.entitlements import mark_entitlements_stale
@@ -125,6 +129,55 @@ async def _bound_lock_wait(session: AsyncSession) -> None:
 
 
 # --------------------------------------------------------------------------
+# sync slots
+# --------------------------------------------------------------------------
+
+
+class SyncCapacityExceeded(RuntimeError):
+    """Every sync slot in this process stayed busy for the whole wait."""
+
+
+_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _sync_slots() -> asyncio.Semaphore:
+    """This process's sync slots.
+
+    One set per event loop, because an asyncio primitive belongs to the loop it
+    first waits on and the test suite runs many loops. Rebuilt if the limit
+    changes, which only tests do; a sync already holding a slot releases it to
+    the set it took it from.
+    """
+    loop = asyncio.get_running_loop()
+    limit = get_settings().max_concurrent_syncs
+    held = _slots.get(loop)
+    if held is None or held[0] != limit:
+        held = (limit, asyncio.Semaphore(limit))
+        _slots[loop] = held
+    return held[1]
+
+
+@asynccontextmanager
+async def _sync_slot() -> AsyncIterator[None]:
+    slots = _sync_slots()
+    timeout = get_settings().sync_slot_timeout_seconds
+    try:
+        async with asyncio.timeout(timeout):
+            await slots.acquire()
+    except TimeoutError:
+        sync_rejections.inc()
+        raise SyncCapacityExceeded(
+            f"all {get_settings().max_concurrent_syncs} sync slots busy for {timeout}s"
+        ) from None
+    try:
+        yield
+    finally:
+        slots.release()
+
+
+# --------------------------------------------------------------------------
 # tier resolution
 # --------------------------------------------------------------------------
 
@@ -213,7 +266,30 @@ async def sync_subscription_from_stripe(
     The cost is holding a row lock across a network call to Stripe -- a few
     hundred milliseconds, and only ever contended by events for the same
     customer.
+
+    Bounded per process. A sync holds a database connection across its Stripe
+    calls too, so when Stripe is slow, syncs are what fill the pool. At most
+    `max_concurrent_syncs` run at once; the rest wait up to
+    `sync_slot_timeout_seconds` and then raise SyncCapacityExceeded, which a
+    webhook answers with a 500 that Stripe redelivers.
     """
+    async with _sync_slot():
+        return await _sync(
+            session,
+            stripe_customer_id=stripe_customer_id,
+            stripe_event_id=stripe_event_id,
+            reason=reason,
+        )
+
+
+async def _sync(
+    session: AsyncSession,
+    *,
+    stripe_customer_id: str,
+    stripe_event_id: str | None,
+    reason: str,
+) -> Subscription | None:
+    """The body of `sync_subscription_from_stripe`, run inside a slot."""
     sub = await _find_by_customer(session, stripe_customer_id, lock=True)
     remote: RemoteSubscription | None = None
 
