@@ -80,7 +80,7 @@ async def test_full_upgrade_flow(client, stripe):
         "/v1/billing/checkout", json={"tier": "pro", "interval": "monthly"}, headers=USER
     )
     assert checkout.status_code == 200
-    assert checkout.json()["checkout_url"].startswith("https://checkout.stripe.test")
+    assert checkout.json()["checkout_url"] == "https://checkout.stripe.test/session"
     assert (await client.get("/v1/entitlements", headers=USER)).json()["tier"] == "free"
 
     # 3. the webhook is what grants
@@ -105,7 +105,7 @@ async def test_full_upgrade_flow(client, stripe):
     # 5. and the portal is where every later change happens
     portal = await client.post("/v1/billing/portal", headers=USER)
     assert portal.status_code == 200
-    assert portal.json()["portal_url"].startswith("https://portal.stripe.test")
+    assert portal.json()["portal_url"] == "https://portal.stripe.test/session"
 
 
 async def test_a_second_checkout_is_refused_while_subscribed(client, stripe):

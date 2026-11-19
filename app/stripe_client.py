@@ -34,9 +34,9 @@ def _client() -> Any:
     Stripe's default HTTP client waits **80 seconds** and retries twice, so an
     unconfigured call can occupy a worker for four minutes. That matters more
     here than in most integrations: `sync_subscription_from_stripe` holds a
-    `SELECT ... FOR UPDATE` on the subscription row across this call, so the
-    Stripe timeout is also the ceiling on how long every other event for that
-    customer waits.
+    `SELECT ... FOR UPDATE` on the subscription row across its reads, so the
+    Stripe timeout is also the ceiling on how long the lock is held -- which is
+    why those reads also opt out of the retries (see UNDER_LOCK).
     """
     global _http_client
     settings = get_settings()
@@ -60,6 +60,17 @@ def reset_http_client() -> None:
 
 async def _call(fn, /, *args, **kwargs):
     return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+# For the reads `sync_subscription_from_stripe` makes while it holds a
+# customer's row lock and a database connection. The SDK retries a timed-out
+# request twice by default, which turns a 10-second timeout into about 31
+# seconds of lock (three attempts plus backoff) -- and nothing is gained by it,
+# because every caller of sync retries on its own: Stripe redelivers a failed
+# webhook, reconcile runs again, a person clicks again. One attempt keeps the
+# timeout an honest ceiling. Everything else keeps the SDK's retries (it puts
+# an idempotency key on each write it retries); none of it runs under the lock.
+UNDER_LOCK = {"max_network_retries": 0}
 
 
 def _as_dict(value: Any) -> Any:
@@ -229,6 +240,7 @@ async def fetch_current_subscription(customer_id: str) -> RemoteSubscription | N
     api = _client()
     result = await _call(
         api.Subscription.list,
+        **UNDER_LOCK,
         customer=customer_id,
         status="all",
         limit=100,
@@ -280,7 +292,9 @@ async def retrieve_price(price_id: str) -> dict:
 
 async def retrieve_customer(customer_id: str) -> RemoteCustomer:
     api = _client()
-    return parse_customer(_as_dict(await _call(api.Customer.retrieve, customer_id)))
+    return parse_customer(
+        _as_dict(await _call(api.Customer.retrieve, customer_id, **UNDER_LOCK))
+    )
 
 
 async def retrieve_charge(charge_id: str) -> dict:
