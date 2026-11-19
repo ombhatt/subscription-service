@@ -113,9 +113,23 @@ def test_lock_and_stripe_timeouts_are_actually_bounded():
     assert 0 < s.stripe_timeout_seconds < 60
     assert 0 < s.db_command_timeout_seconds < 120
     assert 0 < s.redis_timeout_seconds < 30
+    assert 0 < s.sync_slot_timeout_seconds < 60
     # The lock wait must be shorter than the call it is waiting behind, or it
     # never fires and the bound is decorative.
     assert s.db_lock_timeout_seconds < s.stripe_timeout_seconds
+
+
+def test_syncs_cannot_take_every_database_connection():
+    """Each sync holds a connection across its Stripe calls. Capped below what
+    the pool can hand out, so a slow Stripe cannot leave the rest of the API --
+    every request reads entitlements -- waiting for one."""
+    from app.config import Settings
+
+    url = "postgresql+asyncpg://app@localhost/subscriptions"
+    pool = create_async_engine(url, **engine_kwargs(url)).sync_engine.pool
+    capacity = pool.size() + pool._max_overflow
+
+    assert 0 < Settings().max_concurrent_syncs < capacity
 
 
 def test_the_stripe_client_sets_a_timeout():

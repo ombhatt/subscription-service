@@ -107,6 +107,17 @@ quota_errors = Counter(
 # being enforced. Alert on a sustained non-zero rate: the cache is unreachable
 # and every metered endpoint is uncapped until it is back.
 
+sync_rejections = Counter(
+    "sync_rejections_total",
+    "Syncs refused because every sync slot in the process stayed busy. "
+    "A webhook refused this way returns 500 and Stripe redelivers it.",
+    registry=REGISTRY,
+)
+
+# Non-zero means Stripe is slow enough that syncs are queueing for slots. Each
+# one is retried, so this is a delay, not a loss -- but a sustained rate is a
+# backlog, and webhook_lag will show it growing.
+
 subscription_transitions = Counter(
     "subscription_transitions_total",
     "Tier changes, by where they ended up.",
