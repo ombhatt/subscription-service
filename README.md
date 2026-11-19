@@ -663,6 +663,7 @@ three this file has always told you to alert on:
 | `entitlement_cache_total{result}` | hit / miss / **stale** — a rising stale rate is an outage in progress |
 | `quota_rejections_total{quota,tier}` | how often the paywall actually fires |
 | `quota_errors_total{quota}` | quota checks that could not reach Redis and let the request through — **alert on it**: non-zero means caps are not being enforced |
+| `sync_rejections_total` | syncs refused because every sync slot in the process stayed busy — Stripe is slow; each refused webhook is redelivered, so a sustained rate is a backlog (watch `webhook_lag_seconds`), not lost events |
 
 Two limits worth knowing. Metrics are per-process and in memory, so under
 several workers a scrape sees one of them — `prometheus_client`'s multiprocess

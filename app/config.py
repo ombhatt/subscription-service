@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     # fast returns 500 and Stripe retries, which is far better than workers
     # piling up on a lock that a degraded Stripe is holding.
     db_lock_timeout_seconds: float = 5.0
+    # How many syncs one process runs at once. Each holds a database connection
+    # across its Stripe calls, so when Stripe is slow it is syncs that fill the
+    # pool -- and entitlement reads, on every API request, queue behind them.
+    # Kept below the pool's size (SQLAlchemy's default, 5 + 10 overflow) so
+    # those reads always find a connection.
+    max_concurrent_syncs: int = 5
+    # How long a sync waits for one of those slots before giving up. Enough to
+    # absorb the burst one checkout produces at normal Stripe latency; when
+    # every slot stays busy that long Stripe is slow, and failing is right: the
+    # webhook returns 500 and Stripe redelivers it.
+    sync_slot_timeout_seconds: float = 5.0
     db_command_timeout_seconds: float = 15.0
     redis_timeout_seconds: float = 2.0
 
