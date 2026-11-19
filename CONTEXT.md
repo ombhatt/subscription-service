@@ -7,10 +7,11 @@ distinction is here because getting it wrong has already cost something.
 
 `subscriptions.tier` — **what Stripe says this customer pays for.**
 
-A mirror of remote state, and `_apply_remote` in `app/services/subscriptions.py`
-is its only writer. `reconcile` compares it against Stripe and repairs
-divergence; that is the entire purpose of the column and of the
-`reconciliation_drift` metric.
+A mirror of remote state, decided in `app/services/subscriptions.py` by
+`project` (Stripe's answer in the shape of the row, a pure function) and
+written by `_write`, its only writer. `reconcile` compares it against Stripe
+through the same `project` and repairs divergence; that is the entire purpose
+of the column and of the `reconciliation_drift` metric.
 
 Nothing else may write it. A second writer holding a value Stripe never said
 is, by definition, drift — and `reconcile` will faithfully undo it.

@@ -589,7 +589,8 @@ expires) and `undrained` (a plain `session.commit()` dropped marks).
 ### Mirrored tier vs effective tier
 
 `subscriptions.tier` is a **mirror of Stripe** — what the customer pays for —
-and `_apply_remote` is its only writer. What they may actually *use* is the
+decided by `project` and written only by `_write`, both in
+`app/services/subscriptions.py`. What they may actually *use* is the
 **effective tier**, derived on every read by `resolve_entitlements`, which
 folds in the dunning grace window and any manual grant. See
 [CONTEXT.md](CONTEXT.md).
