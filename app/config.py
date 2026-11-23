@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     # once, and anyone hitting five in an hour is testing or scripting it.
     contact_sales_per_hour: int = 5
     contact_sales_per_day: int = 20
+    # The same endpoint, counted across every caller at once. Per-caller limits
+    # are only as good as the caller's address, and behind a proxy that appends
+    # to X-Forwarded-For that address can be forged (issue #105); this is the
+    # bound that holds regardless. Far above real demand -- an enterprise lead
+    # form sees a handful a day -- and far below what would fill the database.
+    contact_sales_total_per_hour: int = 100
+    contact_sales_total_per_day: int = 500
     # Read the caller's address from X-Forwarded-For. Off by default because
     # the header is forgeable when nothing in front rewrites it. Turn it on
     # wherever a proxy or CDN terminates TLS, or every caller shares one budget.

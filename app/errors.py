@@ -64,11 +64,22 @@ class RateLimited(Exception):
     """Raised by app/ratelimit.py. Carries what the caller needs to back off:
     the cap, the window it applies to, and when to try again."""
 
-    def __init__(self, *, scope: str, limit: int, window_seconds: int, retry_after: int) -> None:
+    def __init__(
+        self,
+        *,
+        scope: str,
+        limit: int,
+        window_seconds: int,
+        retry_after: int,
+        shared: bool = False,
+    ) -> None:
         self.scope = scope
         self.limit = limit
         self.window_seconds = window_seconds
         self.retry_after = retry_after
+        # A limit on everyone at once rather than on this caller, so the
+        # message must not blame their network.
+        self.shared = shared
         super().__init__(f"rate limit for {scope!r} exceeded: {limit}/{window_seconds}s")
 
     def to_payload(self) -> dict:
@@ -77,8 +88,12 @@ class RateLimited(Exception):
         return {
             "error": "rate_limited",
             "detail": (
-                "Too many requests from this network. "
-                f"Please try again in {self.retry_after} seconds."
+                (
+                    "We're receiving an unusual number of requests right now. "
+                    if self.shared
+                    else "Too many requests from this network. "
+                )
+                + f"Please try again in {self.retry_after} seconds."
             ),
             "retry_after": self.retry_after,
         }

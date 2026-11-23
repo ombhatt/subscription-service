@@ -29,6 +29,16 @@ def windows(monkeypatch):
 
 
 @pytest.fixture
+def overall(monkeypatch):
+    """A small overall limit: 6 a minute across every caller."""
+    from app import ratelimit
+
+    monkeypatch.setattr(
+        ratelimit, "contact_sales_total_windows", lambda: (Window("minute", 6, 60),)
+    )
+
+
+@pytest.fixture
 def trust_proxy(monkeypatch):
     monkeypatch.setattr(get_settings(), "trust_proxy_headers", True)
 
@@ -158,3 +168,87 @@ def test_the_shipped_windows_come_from_settings():
     assert shipped["hour"].seconds == 3600
     assert shipped["day"].limit == settings.contact_sales_per_day
     assert shipped["day"].seconds == 86_400
+
+
+def test_the_shipped_overall_windows_come_from_settings(monkeypatch):
+    from app.ratelimit import contact_sales_total_windows
+
+    settings = get_settings()
+    # Distinct from the per-caller values, which the suite also sets to 1000,
+    # so a window reading the wrong setting cannot pass.
+    monkeypatch.setattr(settings, "contact_sales_total_per_hour", 77)
+    monkeypatch.setattr(settings, "contact_sales_total_per_day", 333)
+    shipped = {w.name: w for w in contact_sales_total_windows()}
+
+    assert shipped["hour"].limit == settings.contact_sales_total_per_hour > 0
+    assert shipped["hour"].seconds == 3600
+    assert shipped["day"].limit == settings.contact_sales_total_per_day > 0
+    assert shipped["day"].seconds == 86_400
+    # Above what one caller may send, or the overall limit would be the only
+    # one. Compared as shipped: the suite raises the per-caller limits.
+    defaults = {name: field.default for name, field in type(settings).model_fields.items()}
+    assert defaults["contact_sales_total_per_hour"] > defaults["contact_sales_per_hour"]
+    assert defaults["contact_sales_total_per_day"] > defaults["contact_sales_per_day"]
+
+
+# --------------------------------------------------------------------------
+# the overall limit (issue #105)
+# --------------------------------------------------------------------------
+
+
+async def test_forged_addresses_still_stop_at_the_overall_limit(
+    client, session, windows, overall, trust_proxy, clock
+):
+    """Issue #105. Behind a proxy that appends to X-Forwarded-For, the leftmost
+    entry is whatever the caller wrote, so one client rotating it is a new
+    caller every time. The overall limit is what stops that script."""
+    from sqlalchemy import func, select
+
+    from app.models import SalesInquiry
+
+    rejected = counted("rate_limit_rejections_total", scope="contact_sales_total", window="minute")
+
+    codes = [(await post(client, ip=f"10.0.0.{n}, 203.0.113.9")).status_code for n in range(10)]
+
+    assert codes == [201] * 6 + [429] * 4
+    written = (await session.execute(select(func.count()).select_from(SalesInquiry))).scalar_one()
+    assert written == 6
+    assert rejected() == 4
+
+
+async def test_the_overall_limit_tells_visitors_it_is_not_them(
+    client, windows, overall, trust_proxy, clock
+):
+    for n in range(6):
+        await post(client, ip=f"10.0.0.{n}")
+
+    blocked = await post(client, ip="198.51.100.7")
+
+    assert blocked.status_code == 429
+    detail = blocked.json()["detail"].lower()
+    assert "unusual number of requests" in detail and "try again" in detail
+    assert "this network" not in detail
+
+
+async def test_a_caller_refused_by_their_own_limit_does_not_use_up_everyone_elses(
+    client, windows, overall, trust_proxy, clock
+):
+    """Per caller first. Otherwise one spammer who never forges anything could
+    exhaust the overall limit with requests that were refused anyway, and lock
+    out every real visitor."""
+    codes = [(await post(client, ip="203.0.113.10")).status_code for _ in range(20)]
+    assert codes == [201] * 3 + [429] * 17
+
+    assert (await post(client, ip="198.51.100.7")).status_code == 201
+
+
+async def test_the_overall_limit_reopens_with_its_window(
+    client, windows, overall, trust_proxy, clock
+):
+    for n in range(6):
+        await post(client, ip=f"10.0.0.{n}")
+    assert (await post(client, ip="10.0.1.1")).status_code == 429
+
+    clock.advance(seconds=60)
+
+    assert (await post(client, ip="10.0.1.1")).status_code == 201

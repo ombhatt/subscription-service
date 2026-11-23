@@ -202,6 +202,8 @@ Optional, with defaults that are safe but conservative:
 ```
 CONTACT_SALES_PER_HOUR=5           per caller, on the one unauthenticated write;
 CONTACT_SALES_PER_DAY=20           0 disables that window
+CONTACT_SALES_TOTAL_PER_HOUR=100   the same, across every caller at once --
+CONTACT_SALES_TOTAL_PER_DAY=500    the bound that holds when addresses are forged
 TRUST_PROXY_HEADERS=false          read the caller's address from X-Forwarded-For
 ```
 
@@ -211,6 +213,13 @@ budget -- the first real traffic spike locks everyone out. On, with nothing in
 front rewriting the header, a caller sets it themselves and the limit counts a
 value the attacker chooses. Turn it on exactly when something you control
 terminates TLS in front of the service (Vercel, Fly, Cloudflare, an ALB).
+
+Even on, the per-caller limit is only exact behind a proxy that *replaces*
+`X-Forwarded-For` (Vercel). Fly, Cloudflare and ALBs append to the header the
+caller sent, so a caller reaching the API directly can still present a new
+address per request (issue #105). The `CONTACT_SALES_TOTAL_*` limits are what
+bound that: a script rotating addresses gets at most that many rows in, and
+while it is at it, real visitors are asked to try again later.
 
 The limiter fails open: if Redis is unreachable the request is allowed and
 `rate_limit_errors_total` increments. Alert on that counter -- a sustained
