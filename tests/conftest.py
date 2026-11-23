@@ -37,6 +37,8 @@ os.environ.update(
         # tests/test_rate_limit.py sets its own windows.
         "CONTACT_SALES_PER_HOUR": "1000",
         "CONTACT_SALES_PER_DAY": "1000",
+        "CONTACT_SALES_TOTAL_PER_HOUR": "1000",
+        "CONTACT_SALES_TOTAL_PER_DAY": "1000",
         "ENTITLEMENT_CACHE_TTL": "60",
         # Explicitly blank so the suite never picks up a real key from a
         # developer's .env. Without this the flag tests pass in CI, which

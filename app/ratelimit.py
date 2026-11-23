@@ -15,6 +15,16 @@ and `limit` again at the start of the next. For an abuse control on a lead form
 that is an acceptable edge; a sliding window means a sorted set per caller and
 considerably more Redis for the same outcome.
 
+Per caller, then for everyone. A per-caller limit counts an address, and an
+address is only as trustworthy as the proxy reporting it (see `client_ip`). So
+the endpoint also has an overall limit, the same windows counted across every
+caller at once: a script that forges a new address per request still cannot
+insert more than that. The per-caller check runs first, so requests a caller's
+own limit refuses do not use up everyone else's allowance -- only someone
+evading the per-caller limit can exhaust the shared one, and while they do,
+real visitors are asked to try again later. That is the trade: a flood delays
+leads instead of filling the database.
+
 **Fails open.** If the cache cannot answer, the request is allowed, logged and
 counted. The other choice turns a Redis blip into lost sales leads, which is
 worse than a brief window in which a flood gets through -- and a flood still
@@ -59,15 +69,27 @@ def client_ip(request: Request) -> str:
     budget. See TRUST_PROXY_HEADERS in DEPLOY.md.
     """
     if get_settings().trust_proxy_headers:
-        # Leftmost entry: the client as recorded by the first proxy that saw it.
+        # Leftmost entry. That is the client only when the proxy in front
+        # *replaces* the header, as Vercel does. Fly, Cloudflare and ALBs append
+        # to whatever the caller sent, so there the leftmost entry is the
+        # caller's choice -- and counting from the right instead does not work
+        # either while the API is reachable both directly and through the web
+        # app (issue #105). The overall limit in contact_sales_rate_limit is
+        # what bounds a caller who forges this.
         first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
         if first:
             return first[:45]  # an IPv6 address with a zone index, at most
     return request.client.host if request.client else "unknown"
 
 
-async def enforce(scope: str, identity: str, windows: tuple[Window, ...]) -> None:
-    """Count this request against every window, or raise RateLimited."""
+async def enforce(
+    scope: str, identity: str, windows: tuple[Window, ...], *, shared: bool = False
+) -> None:
+    """Count this request against every window, or raise RateLimited.
+
+    `shared` marks a limit counted across all callers, which changes only what
+    the refused caller is told.
+    """
     now = timeutil.utcnow().timestamp()
     cache = get_cache()
 
@@ -91,6 +113,7 @@ async def enforce(scope: str, identity: str, windows: tuple[Window, ...]) -> Non
                 limit=window.limit,
                 window_seconds=window.seconds,
                 retry_after=retry_after,
+                shared=shared,
             )
 
 
@@ -102,6 +125,14 @@ def contact_sales_windows() -> tuple[Window, ...]:
     )
 
 
+def contact_sales_total_windows() -> tuple[Window, ...]:
+    settings = get_settings()
+    return (
+        Window("hour", settings.contact_sales_total_per_hour, 3600),
+        Window("day", settings.contact_sales_total_per_day, 86_400),
+    )
+
+
 async def contact_sales_rate_limit(request: Request) -> None:
     """Dependency, so it runs *before* the body is validated.
 
@@ -110,3 +141,4 @@ async def contact_sales_rate_limit(request: Request) -> None:
     request, a JSON parse and a round trip.
     """
     await enforce("contact_sales", client_ip(request), contact_sales_windows())
+    await enforce("contact_sales_total", "all", contact_sales_total_windows(), shared=True)
