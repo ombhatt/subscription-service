@@ -242,6 +242,108 @@
         "title": "ContactSalesResponse",
         "type": "object"
       },
+      "CreditBalance": {
+        "description": "Prepaid credits the user can spend past a daily cap.\n\nRead from Postgres on every request, never cached: see app/services/credits.py.",
+        "properties": {
+          "balance": {
+            "description": "credits in batches that have not expired",
+            "title": "Balance",
+            "type": "integer"
+          },
+          "next_expiry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "when the soonest-expiring batch with credits left lapses; null if none",
+            "title": "Next Expiry At"
+          }
+        },
+        "required": [
+          "balance",
+          "next_expiry_at"
+        ],
+        "title": "CreditBalance",
+        "type": "object"
+      },
+      "CreditGrantRequest": {
+        "properties": {
+          "credits": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1000000.0,
+            "title": "Credits",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reason",
+            "type": "string"
+          },
+          "user_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "credits",
+          "reason"
+        ],
+        "title": "CreditGrantRequest",
+        "type": "object"
+      },
+      "CreditGrantResponse": {
+        "properties": {
+          "balance": {
+            "$ref": "#/components/schemas/CreditBalance"
+          },
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "credits": {
+            "title": "Credits",
+            "type": "integer"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "user_id",
+          "credits",
+          "reason",
+          "expires_at",
+          "created_by",
+          "balance"
+        ],
+        "title": "CreditGrantResponse",
+        "type": "object"
+      },
       "Discount": {
         "description": "A discount mirrored from Stripe; see stripe_client._discount.",
         "properties": {
@@ -368,6 +470,9 @@
             "title": "Cancel At Period End",
             "type": "boolean"
           },
+          "credits": {
+            "$ref": "#/components/schemas/CreditBalance"
+          },
           "current_period_end": {
             "anyOf": [
               {
@@ -437,7 +542,8 @@
           "quotas",
           "current_period_end",
           "cancel_at_period_end",
-          "grace_ends_at"
+          "grace_ends_at",
+          "credits"
         ],
         "title": "EntitlementResponse",
         "type": "object"
@@ -1225,6 +1331,76 @@
         "summary": "Readyz",
         "tags": [
           "ops"
+        ]
+      }
+    },
+    "/v1/admin/credits": {
+      "post": {
+        "description": "Give a user prepaid credits: goodwill, a won dispute, an outage make-good.\n\nOne batch with the standard expiry and one `admin` ledger entry naming the\nactor. Any tier may hold credits; whether they can be *spent* is the\nquota path's question, not this one's.",
+        "operationId": "grant_credits_v1_admin_credits_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Admin-Actor",
+            "required": false,
+            "schema": {
+              "default": "unknown",
+              "title": "X-Admin-Actor",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grant Credits",
+        "tags": [
+          "admin"
         ]
       }
     },

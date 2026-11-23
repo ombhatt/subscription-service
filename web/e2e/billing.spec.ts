@@ -1,4 +1,4 @@
-import { PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
+import { PLUS_SUBSCRIBER, PRO_SUBSCRIBER, expect, signIn, test } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
@@ -215,4 +215,27 @@ test("a pending cancellation can be undone from the banner", async ({ page, api 
   await expect(page.getByText(/Renews Oct 3, 2026/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel subscription" })).toBeVisible();
   expect(api.resumeCalls).toBe(1);
+});
+
+test("credits show their balance and the soonest expiry", async ({ page, api }) => {
+  Object.assign(api.state, {
+    ...PLUS_SUBSCRIBER,
+    credits: { balance: 2500, next_expiry_at: "2027-11-03T12:00:00Z" },
+  });
+  await page.goto("/billing");
+
+  const card = page.getByRole("region", { name: "Credits" });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("2,500 credits");
+  await expect(card).toContainText("Nov 3, 2027");
+});
+
+test("a user with no credits sees nothing about them", async ({ page, api }) => {
+  Object.assign(api.state, PLUS_SUBSCRIBER);
+  await page.goto("/billing");
+
+  // Wait for the page proper, so the absence below is not just "not loaded yet".
+  await expect(page.getByRole("heading", { name: /Plus/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Credits" })).toHaveCount(0);
+  await expect(page.getByText(/credit/i)).toHaveCount(0);
 });

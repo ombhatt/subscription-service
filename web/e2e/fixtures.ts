@@ -91,6 +91,8 @@ export interface FakeState {
   cancelAtPeriodEnd: boolean;
   graceEndsAt: string | null;
   discount: Discount | null;
+  /** Prepaid credits held, and when the soonest-expiring batch lapses. */
+  credits: Entitlements["credits"];
   /** Bumps the tier to this after N entitlement reads, to imitate a webhook landing. */
   grantAfterReads?: { reads: number; tier: Tier };
 }
@@ -123,6 +125,7 @@ class FakeApi {
       cancelAtPeriodEnd: false,
       graceEndsAt: null,
       discount: null,
+      credits: { balance: 0, next_expiry_at: null },
       ...overrides,
     };
   }
@@ -169,6 +172,7 @@ class FakeApi {
       current_period_end: this.state.currentPeriodEnd,
       cancel_at_period_end: this.state.cancelAtPeriodEnd,
       grace_ends_at: this.state.graceEndsAt,
+      credits: this.state.credits,
     };
   }
 

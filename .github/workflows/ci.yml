@@ -140,6 +140,31 @@ jobs:
             echo "::error::app_service can read auth.users"; exit 1
           fi
 
+      # Migration 0008: finance's record of every credit movement. The service
+      # appends to the ledger and spends batches down; it must not be able to
+      # rewrite either, and the web roles must not reach them at all.
+      - name: The credit ledger is append-only for the service
+        env:
+          PGPASSWORD: postgres
+        run: |
+          q() { psql -h localhost -U postgres -d subscriptions -qtAX -v ON_ERROR_STOP=1 -c "$1"; }
+          q "set role app_service;
+             insert into credit_batches (id, user_id, source, credits_granted, remaining, expires_at)
+               values ('ci-batch', 'ci-user', 'admin', 10, 10, now() + interval '1 year');
+             insert into credit_ledger (id, user_id, batch_id, kind, amount, reference)
+               values ('ci-entry', 'ci-user', 'ci-batch', 'admin', 10, 'admin:ci');
+             update credit_batches set remaining = 9 where id = 'ci-batch'"
+          fail=0
+          for sql in "update credit_ledger set amount = 1" "delete from credit_ledger" \
+                     "delete from credit_batches" "update credit_batches set remaining = -1"; do
+            if q "set role app_service; $sql" >/dev/null 2>&1; then echo "::error::app_service could: $sql"; fail=1; fi
+          done
+          for role in anon authenticated; do
+            if q "set role $role; select 1 from credit_batches" >/dev/null 2>&1; then echo "::error::$role can read credit_batches"; fail=1; fi
+          done
+          q "delete from credit_ledger where id = 'ci-entry'; delete from credit_batches where id = 'ci-batch'"
+          exit $fail
+
       # The migration credential's default search_path is `"$user", public`, so
       # a schema named `postgres` -- which ci_runner could create until
       # scripts/ci_db_role.sql confined it -- is searched first. Planting an alembic_version there used to make migrations re-run

@@ -34,12 +34,28 @@ def _load(path: pathlib.Path):
     return module
 
 
+def _later_migrations():
+    """Migrations after 0005 that create tables lock them down themselves:
+    0004 and 0005 run before those tables exist on a fresh database, and never
+    run again on one already past them. Such a migration declares what it
+    closed in `LOCKED_TABLES` and what it granted in `APP_ROLE_GRANTS`."""
+    for path in sorted(VERSIONS.glob("[0-9]*.py")):
+        if path.name > ROLE_MIGRATION.name:
+            yield _load(path)
+
+
 def _locked_tables() -> set[str]:
-    return set(_load(MIGRATION).TABLES)
+    tables = set(_load(MIGRATION).TABLES)
+    for module in _later_migrations():
+        tables |= set(getattr(module, "LOCKED_TABLES", ()))
+    return tables
 
 
 def _role_tables() -> set[str]:
-    return set(_load(ROLE_MIGRATION).TABLES)
+    tables = set(_load(ROLE_MIGRATION).TABLES)
+    for module in _later_migrations():
+        tables |= set(getattr(module, "APP_ROLE_GRANTS", {}))
+    return tables
 
 
 def test_every_model_table_is_locked_down():
@@ -48,8 +64,9 @@ def test_every_model_table_is_locked_down():
     missing = declared - _locked_tables()
     assert not missing, (
         f"{sorted(missing)} would be readable and writable over Supabase's public "
-        f"API. Add them to TABLES in {MIGRATION.name}, or explain in that file why "
-        f"they are safe to leave open."
+        f"API. Lock them down in the migration that creates them and list them in "
+        f"its LOCKED_TABLES (see 0008), or explain in {MIGRATION.name} why they are "
+        f"safe to leave open."
     )
 
 
@@ -87,7 +104,8 @@ def test_the_app_role_can_reach_every_table_the_service_uses():
     missing = declared - _role_tables()
     assert not missing, (
         f"{sorted(missing)} has no policy for the app role, so the service will "
-        f"be denied on it. Add them to TABLES in {ROLE_MIGRATION.name}."
+        f"be denied on it. Grant and add a policy in the migration that creates "
+        f"them, listed in its APP_ROLE_GRANTS (see 0008)."
     )
 
 
@@ -162,3 +180,34 @@ def test_the_app_role_cannot_be_redirected_to_a_schema_named_after_it():
     ]
     assert pins, "no migration pins app_service's search_path"
     assert pins[-1].lower() == "alter role app_service set search_path = public"
+
+
+def test_later_migrations_do_what_they_declare():
+    """`LOCKED_TABLES` and `APP_ROLE_GRANTS` are what the two tests above trust.
+    A declaration the SQL does not carry out would pass them and leave the
+    table open -- or closed to the service."""
+    for module in _later_migrations():
+        recorder = _RecordingOp()
+        module.op = recorder
+        module.upgrade()
+        sql = [s.strip() for s in recorder.sql]
+        for table in getattr(module, "LOCKED_TABLES", ()):
+            assert f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY' in sql, (
+                f"{module.__name__} lists {table} as locked but never enables RLS on it"
+            )
+        for table, privileges in getattr(module, "APP_ROLE_GRANTS", {}).items():
+            assert f'GRANT {privileges} ON public."{table}" TO app_service' in sql
+            assert any(
+                s.startswith(f'CREATE POLICY app_service_full_access ON public."{table}"')
+                for s in sql
+            ), f"{module.__name__} grants {table} but adds no policy for app_service"
+
+
+def test_the_service_cannot_rewrite_the_credit_ledger():
+    """Finance's record of every credit movement. The service appends to it;
+    a bug or a leaked DATABASE_URL must not be able to edit or erase it."""
+    grants = _load(VERSIONS / "0008_credit_ledger.py").APP_ROLE_GRANTS
+    ledger = {p.strip() for p in grants["credit_ledger"].split(",")}
+    assert ledger == {"SELECT", "INSERT"}
+    # Batches outlive the account they belong to: spent down, never deleted.
+    assert "DELETE" not in grants["credit_batches"]

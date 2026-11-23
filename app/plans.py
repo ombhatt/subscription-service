@@ -198,3 +198,13 @@ def price_id_for(tier: Tier, interval: BillingInterval) -> str | None:
         if t is tier and i is interval:
             return price_id
     return None
+
+
+# --------------------------------------------------------------------------
+# prepaid credits (docs/adr/0001-prepaid-credits.md)
+# --------------------------------------------------------------------------
+
+# How long a credit batch stays spendable, counted from the grant. Applies to
+# every batch, bought or granted: expiry is read-time (`expires_at > now`), so
+# changing this moves only batches granted afterwards.
+CREDIT_VALIDITY_MONTHS = 12
