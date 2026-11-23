@@ -580,7 +580,7 @@ A write that changes what someone may do **marks** them and commits through
 commit lets a concurrent reader repopulate the key from the uncommitted row, so
 the stale answer outlives the write by a full TTL — a customer pays, the webhook
 lands, and they keep seeing their old tier. `WEB_CONCURRENCY=1` is no defence:
-the `await` on the Stripe call is a yield point. See [CONTEXT.md](CONTEXT.md).
+the `await` on the Stripe call is a yield point. See [GLOSSARY.md](GLOSSARY.md).
 
 `entitlement_invalidations_total{outcome}` reports `ok`, `failed` (the row
 committed but the cache delete did not — someone holds a wrong answer until it
@@ -593,7 +593,7 @@ decided by `project` and written only by `_write`, both in
 `app/services/subscriptions.py`. What they may actually *use* is the
 **effective tier**, derived on every read by `resolve_entitlements`, which
 folds in the dunning grace window and any manual grant. See
-[CONTEXT.md](CONTEXT.md).
+[GLOSSARY.md](GLOSSARY.md).
 
 The distinction matters because a grace window closes through the passage of
 time, not a write: no webhook fires and no row changes, so the mirror cannot
