@@ -139,7 +139,7 @@ async def test_the_grace_window_closes_on_our_clock_not_stripes(session, clock, 
     # And the job records it -- without touching the mirror. Stripe still says
     # Pro, because Stripe is still retrying the card, and `subscriptions.tier`
     # mirrors Stripe. When this job wrote `free` there, reconcile saw drift and
-    # wrote it back every night. See CONTEXT.md, "mirrored tier".
+    # wrote it back every night. See GLOSSARY.md, "mirrored tier".
     expired = await expire_grace_windows(session)
     assert user_id in expired
     assert (await get_subscription(session, user_id)).tier == "pro", (
