@@ -186,6 +186,10 @@ SUPABASE_URL=https://<project>.supabase.co
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...            from the endpoint you create, not the CLI
 STRIPE_PRICE_{PLUS,PRO}_{MONTHLY,ANNUAL}=price_...
+STRIPE_PRICE_CREDITS_{SMALL,MEDIUM,LARGE}=price_...  one-time credit pack prices;
+                                            an unset one is not offered
+CREDITS_SUCCESS_URL / CREDITS_CANCEL_URL    keep ?session_id={CHECKOUT_SESSION_ID}
+                                            on the success URL
 STRIPE_PORTAL_CONFIGURATION_ID=bpc_...      from `python -m scripts.configure_portal`;
                                             unset, the portal offers only the plan
                                             the customer already has
@@ -346,12 +350,18 @@ if a later one deletes it.
 1. Create the webhook endpoint in the Stripe dashboard pointing at
    `https://your-host/v1/webhooks/stripe`, and put *its* signing secret in
    `STRIPE_WEBHOOK_SECRET` — the `whsec_` the CLI prints is a different secret
-   and will reject every live event.
+   and will reject every live event. Subscribe it to every type in
+   `SUBSCRIPTION_EVENTS`, `DISPUTE_EVENTS` and `CREDIT_PACK_EVENTS` in
+   `app/routers/webhooks.py` — including `checkout.session.async_payment_succeeded`,
+   without which a credit pack paid by bank debit is never granted.
 2. `curl https://your-host/v1/billing/health` — it reports which price ids and
    keys are actually configured, without needing credentials.
 3. Confirm `/docs` returns 404. If it does not, `ENVIRONMENT` is not
    `production`.
 4. Make one real purchase and watch `webhook_events_total` move.
+5. Turn on **Customer emails → Successful payments** in the Stripe Dashboard
+   (Settings → Customer emails). Credit pack receipts come from Stripe, not
+   from this service; with that setting off, a buyer gets none.
 
 ## Dependencies are pinned
 

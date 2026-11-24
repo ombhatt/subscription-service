@@ -9,14 +9,22 @@ import QuotaMeter from "@/components/QuotaMeter";
 import {
   ApiError,
   cancelSubscription,
+  getCreditPacks,
   getEntitlements,
   getPlans,
   getSubscription,
   openPortal,
   resumeSubscription,
+  startCreditCheckout,
 } from "@/lib/api";
-import type { Entitlements, Interval, Plan, SubscriptionSummary } from "@/lib/types";
-import { describeDiscount, formatDate, humanizeKey, offerFor } from "@/lib/types";
+import type {
+  CreditPacks,
+  Entitlements,
+  Interval,
+  Plan,
+  SubscriptionSummary,
+} from "@/lib/types";
+import { describeDiscount, formatAmount, formatDate, humanizeKey, offerFor } from "@/lib/types";
 import { useRequireSession } from "@/lib/user";
 
 export default function BillingPage() {
@@ -34,6 +42,10 @@ export default function BillingPage() {
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
+  // Packs and whether this user may buy one. Null until read, and left null
+  // if the read fails: no buy buttons is the safe way to be wrong.
+  const [packs, setPacks] = useState<CreditPacks | null>(null);
+  const [buying, setBuying] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ready) return;
@@ -48,7 +60,23 @@ export default function BillingPage() {
     getPlans()
       .then(setPlans)
       .catch(() => setPlans([]));
+    getCreditPacks()
+      .then(setPacks)
+      .catch(() => setPacks(null));
   }, [email, ready]);
+
+  const buyCredits = useCallback(async (packId: string) => {
+    setBuying(packId);
+    setError(null);
+    try {
+      // Grants nothing: Stripe's webhook does, and the success page waits for it.
+      const { checkout_url } = await startCreditCheckout(packId);
+      window.location.href = checkout_url;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+      setBuying(null);
+    }
+  }, []);
 
   const manage = useCallback(async () => {
     if (!ready) return;
@@ -106,6 +134,7 @@ export default function BillingPage() {
   // stays a data change rather than a second code path.
   const interval: Interval = (sub?.billing_interval as Interval | null) ?? "monthly";
   const currentPlan = plans.find((plan) => plan.tier === ents?.tier);
+  const canBuy = packs !== null && packs.can_buy && packs.packs.length > 0;
   const offer =
     ents?.source === "subscription" && currentPlan
       ? offerFor(currentPlan.prices[interval], interval, sub?.discount ?? null)
@@ -249,12 +278,18 @@ export default function BillingPage() {
             ))}
           </div>
 
-          {/* Only when there is something to spend: an empty "0 credits" card
-              would advertise a feature nobody has bought into yet. Credits
-              outlive the plan, so this shows on any tier. */}
-          {ents.credits.balance > 0 && (
+          {/* Shown when there is something to spend or something to buy: an
+              empty "0 credits" card for someone who cannot buy would advertise
+              a feature they have no way into. Credits outlive the plan, so a
+              balance shows on any tier; the buy buttons only to those who may
+              buy (an active or trialing Plus or Pro subscription). */}
+          {(ents.credits.balance > 0 || canBuy) && (
             <section className="card" aria-labelledby="credits-heading">
               <h2 id="credits-heading">Credits</h2>
+              <p className="muted" style={{ marginTop: 0 }}>
+                One credit is one message past your daily cap, used only once the
+                day&apos;s allowance is gone. Credits last 12 months.
+              </p>
               <div className="rows">
                 <div className="row-item">
                   <span className="k">Balance</span>
@@ -270,6 +305,26 @@ export default function BillingPage() {
                   </div>
                 )}
               </div>
+              {canBuy && (
+                <div className="inline" role="group" aria-label="Buy credits" style={{ marginTop: 16 }}>
+                  {packs!.packs.map((pack) => (
+                    <button
+                      key={pack.id}
+                      className="btn"
+                      onClick={() => buyCredits(pack.id)}
+                      disabled={buying !== null}
+                      aria-busy={buying === pack.id}
+                    >
+                      {buying === pack.id
+                        ? "Opening checkout…"
+                        : `Buy ${pack.credits.toLocaleString()} credits` +
+                          (pack.unit_amount !== null
+                            ? ` — ${formatAmount(pack.unit_amount, pack.currency)}`
+                            : "")}
+                    </button>
+                  ))}
+                </div>
+              )}
             </section>
           )}
 

@@ -230,12 +230,47 @@ test("credits show their balance and the soonest expiry", async ({ page, api }) 
   await expect(card).toContainText("Nov 3, 2027");
 });
 
-test("a user with no credits sees nothing about them", async ({ page, api }) => {
-  Object.assign(api.state, PLUS_SUBSCRIBER);
+test("a user with no credits who cannot buy them sees nothing about them", async ({
+  page,
+  api,
+}) => {
+  // Free: the paywall offers the upgrade, not credits.
   await page.goto("/billing");
 
   // Wait for the page proper, so the absence below is not just "not loaded yet".
-  await expect(page.getByRole("heading", { name: /Plus/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Free/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Credits" })).toHaveCount(0);
   await expect(page.getByText(/credit/i)).toHaveCount(0);
+  expect(api.creditCheckoutBodies).toEqual([]);
+});
+
+test("a past-due subscriber is not offered credits", async ({ page, api }) => {
+  Object.assign(api.state, { ...PLUS_SUBSCRIBER, status: "past_due" });
+  await page.goto("/billing");
+
+  await expect(page.getByRole("heading", { name: /Plus/ })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Buy credits" })).toHaveCount(0);
+});
+
+test("a subscriber buys a pack and sees the new balance", async ({ page, api }) => {
+  Object.assign(api.state, PLUS_SUBSCRIBER);
+  // The webhook lands on the second poll.
+  api.state.creditGrantAfterPolls = { polls: 2, credits: 2500 };
+  await page.goto("/billing");
+
+  const card = page.getByRole("region", { name: "Credits" });
+  await expect(card).toContainText("0 credits");
+  const buy = card.getByRole("group", { name: "Buy credits" });
+  await expect(buy.getByRole("button")).toHaveCount(3);
+  await buy.getByRole("button", { name: /Buy 2,500 credits — \$20/ }).click();
+
+  await expect(page).toHaveURL(/\/billing\/credits\/success\?session_id=cs_credits_fake/);
+  expect(api.creditCheckoutBodies).toEqual([{ pack_id: "medium" }]);
+  await expect(page.getByRole("heading", { name: "Credits added" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByText(/Your balance is now/)).toContainText("2,500 credits");
+
+  await page.getByRole("link", { name: "View billing" }).click();
+  await expect(page.getByRole("region", { name: "Credits" })).toContainText("2,500 credits");
 });

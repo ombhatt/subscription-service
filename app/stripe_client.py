@@ -16,6 +16,7 @@ import stripe
 from stripe._http_client import RequestsClient
 
 from app.billing_provider import (
+    RemoteCheckoutSession,
     RemoteCustomer,
     RemotePrice,
     RemoteSubscription,
@@ -156,6 +157,42 @@ async def create_checkout_session(
     else:
         params["allow_promotion_codes"] = True
 
+    session = await _call(api.checkout.Session.create, idempotency_key=idempotency_key, **params)
+    return _as_dict(session)
+
+
+async def create_credit_checkout_session(
+    *,
+    customer_id: str,
+    price_id: str,
+    user_id: str,
+    metadata: dict[str, str],
+    success_url: str,
+    cancel_url: str,
+    idempotency_key: str,
+) -> dict:
+    """A one-time payment for a credit pack.
+
+    `metadata` is what the webhook routes on (`kind`) and grants from, so it is
+    stamped on the session *and* on the PaymentIntent: a refund or dispute
+    arrives on the charge, and later tickets find the purchase from there.
+    Tax is handled exactly as subscription checkout handles it.
+    """
+    s = get_settings()
+    api = _client()
+    params: dict[str, Any] = {
+        "mode": "payment",
+        "customer": customer_id,
+        "client_reference_id": user_id,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "metadata": metadata,
+        "payment_intent_data": {"metadata": metadata},
+    }
+    if s.automatic_tax:
+        params["automatic_tax"] = {"enabled": True}
+        params["customer_update"] = {"address": "auto"}
     session = await _call(api.checkout.Session.create, idempotency_key=idempotency_key, **params)
     return _as_dict(session)
 
@@ -346,6 +383,29 @@ def parse_subscription(raw: dict) -> RemoteSubscription:
         cancel_at_period_end=bool(raw.get("cancel_at_period_end")),
         trial_end=_ts(raw.get("trial_end")),
         discount=_discount(raw),
+        metadata=dict(raw.get("metadata") or {}),
+    )
+
+
+def parse_checkout_session(raw: dict) -> RemoteCheckoutSession:
+    """A Checkout Session as a webhook (or a list call) delivers it.
+
+    Only `paid` is paid. Credit checkout takes no promotion codes, so the other
+    completed status, `no_payment_required`, cannot happen for a pack.
+    """
+    intent = raw.get("payment_intent")
+    if isinstance(intent, dict):
+        intent = intent.get("id")
+    customer = raw.get("customer")
+    if isinstance(customer, dict):
+        customer = customer.get("id")
+    return RemoteCheckoutSession(
+        id=raw["id"],
+        customer_id=customer,
+        paid=raw.get("payment_status") == "paid",
+        payment_intent_id=intent,
+        amount_total=raw.get("amount_total"),
+        currency=raw.get("currency"),
         metadata=dict(raw.get("metadata") or {}),
     )
 

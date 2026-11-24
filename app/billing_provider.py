@@ -69,6 +69,26 @@ class RemoteCustomer:
 
 
 @dataclass(frozen=True)
+class RemoteCheckoutSession:
+    """A one-time (`mode: payment`) Checkout Session: what a credit grant reads.
+
+    Subscription checkouts never become one of these; their state arrives
+    through `sync_subscription_from_stripe` instead.
+    """
+
+    id: str
+    customer_id: str | None
+    # True once the money has moved. A delayed method (a bank debit) completes
+    # the session unpaid and pays later, in `async_payment_succeeded`.
+    paid: bool
+    payment_intent_id: str | None
+    # In the currency's smallest unit, after tax and discounts.
+    amount_total: int | None
+    currency: str | None
+    metadata: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SubscriptionPage:
     items: list[RemoteSubscription]
     has_more: bool
@@ -104,6 +124,18 @@ class BillingProvider(Protocol):
         idempotency_key: str,
         trial_period_days: int = 0,
         promo_code: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def create_credit_checkout_session(
+        self,
+        *,
+        customer_id: str,
+        price_id: str,
+        user_id: str,
+        metadata: dict[str, str],
+        success_url: str,
+        cancel_url: str,
+        idempotency_key: str,
     ) -> dict[str, Any]: ...
 
     async def create_portal_session(

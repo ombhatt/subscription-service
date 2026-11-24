@@ -18,6 +18,10 @@ export type SubscriptionSummary = Schemas["SubscriptionSummary"];
 export type ChatReply = Schemas["ChatReply"];
 export type ContactSalesPayload = Schemas["ContactSalesRequest"];
 export type CheckoutPayload = Schemas["CheckoutRequest"];
+export type CreditCheckoutPayload = Schemas["CreditCheckoutRequest"];
+export type CreditPacks = Schemas["CreditPacksResponse"];
+export type CreditPack = Schemas["CreditPackOffer"];
+export type CreditPurchase = Schemas["CreditPurchaseResponse"];
 /**
  * The generator marks `interval` required because the server defaults it, but
  * a request may omit it. "Manage billing" sends neither field.

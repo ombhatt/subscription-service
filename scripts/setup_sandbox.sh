@@ -257,6 +257,7 @@ stage "Products and prices"
 say "Creating Plus and Pro, each with a monthly and an annual price, from"
 say "app/plans.py. Every price is stamped with its tier, which is what lets a"
 say "grandfathered price keep working after you change what you charge."
+say "Also the one-time credit pack prices (small, medium, large)."
 "$PY" -m scripts.seed_stripe || { warn "seeding failed; fix the error above and re-run"; exit 1; }
 say ""
 say "Reading the price ids back from Stripe by lookup key..."
@@ -266,7 +267,13 @@ while IFS= read -r line; do
 done < <("$PY" - <<'PY'
 import stripe
 from app.config import get_settings
-from app.plans import PURCHASABLE_TIERS, BillingInterval, price_env_name
+from app.plans import (
+    CREDIT_PACKS,
+    PURCHASABLE_TIERS,
+    BillingInterval,
+    credit_pack_env_name,
+    price_env_name,
+)
 
 settings = get_settings()
 stripe.api_key = settings.stripe_secret_key
@@ -277,6 +284,10 @@ for tier in PURCHASABLE_TIERS:
         ).data
         if found:
             print(f"{price_env_name(tier, interval)}={found[0].id}")
+for pack_id in CREDIT_PACKS:
+    found = stripe.Price.list(lookup_keys=[f"credits_{pack_id}"], active=True, limit=1).data
+    if found:
+        print(f"{credit_pack_env_name(pack_id)}={found[0].id}")
 PY
 )
 
@@ -319,10 +330,10 @@ stage "GitHub Actions secrets"
 say "CI runs the test-clock suite against this sandbox: nightly, and on pull"
 say "requests that touch the service."
 set_secret STRIPE_SECRET_KEY "$STRIPE_SECRET_KEY"
-# Every price stage 3 wrote, one per purchasable tier and interval. A workflow
-# only sees the secrets it names, so a new tier also needs its two lines in
-# .github/workflows/stripe-sandbox.yml.
-keys=$(grep -oE '^STRIPE_PRICE_[A-Z0-9]+_(MONTHLY|ANNUAL)=' "$ENV_FILE" | tr -d '=' | sort -u || true)
+# Every price stage 3 wrote: one per purchasable tier and interval, and one per
+# credit pack. A workflow only sees the secrets it names, so a new tier also
+# needs its two lines in .github/workflows/stripe-sandbox.yml.
+keys=$(grep -oE '^STRIPE_PRICE_([A-Z0-9]+_(MONTHLY|ANNUAL)|CREDITS_[A-Z0-9]+)=' "$ENV_FILE" | tr -d '=' | sort -u || true)
 [[ -n "$keys" ]] || warn "no STRIPE_PRICE_* lines in .env"
 for key in $keys; do
   value=$(grep -E "^${key}=" "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)

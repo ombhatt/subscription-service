@@ -222,3 +222,40 @@ def credit_cost(key: str) -> int | None:
 # every batch, bought or granted: expiry is read-time (`expires_at > now`), so
 # changing this moves only batches granted afterwards.
 CREDIT_VALIDITY_MONTHS = 12
+
+
+# --------------------------------------------------------------------------
+# credit packs
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CreditPack:
+    id: str
+    credits: int
+
+
+# What a pack holds. What it costs lives in Stripe (scripts/seed_stripe.py sets
+# the amounts), and its price id is read from STRIPE_PRICE_CREDITS_<PACK>.
+CREDIT_PACKS: dict[str, CreditPack] = {
+    pack.id: pack
+    for pack in (
+        CreditPack(id="small", credits=500),
+        CreditPack(id="medium", credits=2_500),
+        CreditPack(id="large", credits=7_500),
+    )
+}
+
+# Who may buy a pack: an active or trialing subscription to one of these, and
+# no grant that lifts them above it. Free has the upgrade instead; Enterprise
+# is unlimited, and anything extra there goes through sales.
+CREDIT_PACK_TIERS: frozenset[Tier] = frozenset({Tier.PLUS, Tier.PRO})
+
+
+def credit_pack_env_name(pack_id: str) -> str:
+    """The variable a pack's price id is read from: STRIPE_PRICE_CREDITS_SMALL."""
+    return f"STRIPE_PRICE_CREDITS_{pack_id}".upper()
+
+
+def credit_pack_price_id(pack_id: str) -> str | None:
+    return get_settings().stripe_price_ids.get(f"credits_{pack_id}")

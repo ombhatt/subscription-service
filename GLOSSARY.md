@@ -136,10 +136,25 @@ expiry** shown to the user skips spent-out batches: an empty batch expiring
 tomorrow is not news.
 
 `source` is `purchase` or `admin`. Admin batches come from
-`POST /v1/admin/credits`; purchase batches will have exactly one writer, and
+`POST /v1/admin/credits`; purchase batches have exactly one writer,
+`grant_credits_from_checkout` (`app/services/credit_purchases.py`), and
 `stripe_checkout_session_id` is unique so a replayed webhook cannot pay out
 twice. `user_id` has no foreign key, like `subscriptions`: the account lives in
 Supabase and these rows must outlive it.
+
+## Credit pack
+
+A fixed number of credits sold for a one-time payment: `CREDIT_PACKS` in
+`app/plans.py` (small 500, medium 2,500, large 7,500), priced in Stripe by
+`scripts/seed_stripe.py` and found through `STRIPE_PRICE_CREDITS_<PACK>`. Only
+an active or trialing Plus or Pro subscriber may buy one.
+
+A pack becomes a **purchase batch** only when Stripe says it is paid, and only
+through `grant_credits_from_checkout` -- the single writer of purchase batches,
+as `sync_subscription_from_stripe` is of subscription state. The Checkout
+Session's `metadata.kind = credit_pack` is how the webhook tells a pack from a
+subscription checkout; the batch keeps the PaymentIntent id and the amount
+paid, which a refund or dispute is later matched against.
 
 ## Credit spend
 

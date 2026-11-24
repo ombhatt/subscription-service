@@ -4,10 +4,15 @@ The browser's return from checkout renders a page and nothing more: the customer
 may close the tab, lose their connection, or never come back, and they have
 still paid. This endpoint is what changes state.
 
-Every handled event type ends in the same call, `sync_subscription_from_stripe`,
+Every subscription event ends in the same call, `sync_subscription_from_stripe`,
 which re-reads the customer's real state rather than applying the event payload
 as a delta. Duplicate deliveries are therefore no-ops and out-of-order
 deliveries converge on the truth.
+
+A credit pack's checkout (`metadata.kind == "credit_pack"`) is routed first to
+`grant_credits_from_checkout`, which is idempotent by the checkout session id.
+The subscription re-sync after it is unchanged, and harmless: it asks Stripe and
+writes down the same answer.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from app.observability import (
 from app.observability import (
     event as log_event,
 )
+from app.services.credit_purchases import CREDIT_PACK_KIND, grant_credits_from_checkout
 from app.services.entitlements import commit_and_invalidate
 from app.services.subscriptions import mark_disputed, sync_subscription_from_stripe
 
@@ -58,6 +64,13 @@ SUBSCRIPTION_EVENTS = {
     "invoice.marked_uncollectible",
 }
 DISPUTE_EVENTS = {"charge.dispute.created"}
+# A credit pack is paid on `completed` when the card is charged at once, or on
+# `async_payment_succeeded` when a delayed method (a bank debit) clears later.
+# The Dashboard endpoint must be subscribed to both; see DEPLOY.md.
+CREDIT_PACK_EVENTS = {
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+}
 
 
 @router.post("/stripe", status_code=status.HTTP_200_OK)
@@ -165,15 +178,28 @@ def _short_error() -> str:
     return traceback.format_exc()[-2000:]
 
 
+def _is_credit_pack(obj: dict) -> bool:
+    return (obj.get("metadata") or {}).get("kind") == CREDIT_PACK_KIND
+
+
 async def _handle(session: AsyncSession, event: dict) -> bool:
     event_type = event["type"]
     obj = event["data"]["object"]
+    handled = False
+
+    if event_type in CREDIT_PACK_EVENTS and _is_credit_pack(obj):
+        # Unpaid (a delayed method still pending) grants nothing here; the
+        # `async_payment_succeeded` that follows does.
+        await grant_credits_from_checkout(
+            session, stripe_client.parse_checkout_session(obj), reference=event["id"]
+        )
+        handled = True
 
     if event_type in SUBSCRIPTION_EVENTS:
         customer_id = obj.get("customer")
         if not customer_id:
             log.warning("%s carried no customer; ignoring", event_type)
-            return False
+            return handled
         await sync_subscription_from_stripe(
             session,
             stripe_customer_id=customer_id,
@@ -201,7 +227,7 @@ async def _handle(session: AsyncSession, event: dict) -> bool:
         )
         return True
 
-    return False
+    return handled
 
 
 @router.get("/recent", tags=["ops"], dependencies=[Depends(require_admin)])

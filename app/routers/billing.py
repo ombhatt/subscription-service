@@ -16,10 +16,12 @@ from app.observability import event as log_event
 from app.observability import sales_inquiries
 from app.plans import (
     CATALOG,
+    CREDIT_PACKS,
     PURCHASABLE_TIERS,
     TIER_RANK,
     BillingInterval,
     Tier,
+    credit_pack_price_id,
     price_catalog,
     price_id_for,
 )
@@ -29,6 +31,11 @@ from app.schemas import (
     CheckoutResponse,
     ContactSalesRequest,
     ContactSalesResponse,
+    CreditBalance,
+    CreditCheckoutRequest,
+    CreditPackOffer,
+    CreditPacksResponse,
+    CreditPurchaseResponse,
     Features,
     PlanPrice,
     PlanResponse,
@@ -36,6 +43,12 @@ from app.schemas import (
     PortalResponse,
     QuotaLimit,
     SubscriptionSummary,
+)
+from app.services import credits as credit_service
+from app.services.credit_purchases import (
+    purchase_for,
+    purchase_refusal,
+    start_credit_checkout,
 )
 from app.services.entitlements import commit_and_invalidate, resolve_entitlements
 from app.services.subscriptions import (
@@ -141,6 +154,80 @@ async def checkout(
     return CheckoutResponse(checkout_url=stripe_session["url"], session_id=stripe_session["id"])
 
 
+_CREDIT_PACKS_CACHE_KEY = "credit-packs:v1"
+
+
+async def _credit_pack_offers() -> list[dict]:
+    """Every pack with a configured price, with its amount from Stripe.
+    Cached for the same reason, and as long, as the plans payload."""
+    cached = await get_json(_CREDIT_PACKS_CACHE_KEY)
+    if cached is not None:
+        return cached
+    out = []
+    for pack in CREDIT_PACKS.values():
+        price_id = credit_pack_price_id(pack.id)
+        if not price_id:
+            continue
+        offer = CreditPackOffer(id=pack.id, credits=pack.credits, **await _price_amount(price_id))
+        out.append(offer.model_dump(mode="json"))
+    await set_json(_CREDIT_PACKS_CACHE_KEY, out, _PLANS_CACHE_TTL)
+    return out
+
+
+@router.get("/credits", response_model=CreditPacksResponse)
+async def credit_packs(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CreditPacksResponse:
+    """The packs, and whether this user may buy one. The billing page shows
+    buy buttons only when `can_buy`."""
+    refusal = await purchase_refusal(session, user.id)
+    return CreditPacksResponse(
+        can_buy=refusal is None,
+        reason=refusal,
+        packs=[CreditPackOffer(**offer) for offer in await _credit_pack_offers()],
+    )
+
+
+@router.post("/credits/checkout", response_model=CheckoutResponse)
+async def credit_checkout(
+    body: CreditCheckoutRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CheckoutResponse:
+    """Start a hosted, one-time checkout for a credit pack. Grants nothing --
+    the webhook does, once the payment has cleared. 409 unless the user has an
+    active or trialing Plus or Pro subscription."""
+    if not await is_enabled("checkout-enabled", user_id=user.id):
+        log_event(log, "checkout.disabled", user_id=user.id, pack_id=body.pack_id)
+        raise BillingError(
+            "Checkout is temporarily unavailable. Your plan and access are unaffected.",
+            code=503,
+        )
+    stripe_session = await start_credit_checkout(
+        session, user_id=user.id, email=user.email, pack_id=body.pack_id
+    )
+    await session.commit()
+    return CheckoutResponse(checkout_url=stripe_session["url"], session_id=stripe_session["id"])
+
+
+@router.get("/credits/checkout/{session_id}", response_model=CreditPurchaseResponse)
+async def credit_purchase(
+    session_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CreditPurchaseResponse:
+    """Has this checkout's grant landed? Another user's checkout reads as not
+    granted, the same as one that does not exist."""
+    batch = await purchase_for(session, user_id=user.id, checkout_session_id=session_id)
+    held = await credit_service.balance(session, user.id)
+    return CreditPurchaseResponse(
+        granted=batch is not None,
+        credits=batch.credits_granted if batch is not None else None,
+        balance=CreditBalance(balance=held.credits, next_expiry_at=held.next_expiry_at),
+    )
+
+
 @router.post("/portal", response_model=PortalResponse)
 async def portal(
     body: PortalRequest | None = None,
@@ -236,6 +323,9 @@ async def billing_health() -> dict:
         for tier in PURCHASABLE_TIERS
         for interval in BillingInterval
         if not price_id_for(tier, interval)
+    ]
+    missing += [
+        f"credits/{pack_id}" for pack_id in CREDIT_PACKS if not credit_pack_price_id(pack_id)
     ]
     if not price_catalog():
         raise BillingError("no Stripe prices configured; run scripts/seed_stripe.py", code=503)

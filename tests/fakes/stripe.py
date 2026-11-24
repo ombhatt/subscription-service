@@ -25,6 +25,7 @@ class FakeStripe:
         self.customers: dict[str, dict] = {}
         self.subscriptions: dict[str, dict] = {}
         self.checkout_sessions: list[dict] = []
+        self.credit_checkout_sessions: list[dict] = []
         self.portal_sessions: list[dict] = []
         self.next_customer = 0
         self.cancel_calls = 0
@@ -78,6 +79,36 @@ class FakeStripe:
             "promo_code": promo_code,
         }
         self.checkout_sessions.append(session)
+        return session
+
+    async def create_credit_checkout_session(
+        self,
+        *,
+        customer_id,
+        price_id,
+        user_id,
+        metadata,
+        success_url,
+        cancel_url,
+        idempotency_key,
+    ):
+        """Stripe's shape for a payment-mode session, so a test can hand it
+        straight to `credit_pack_session` and deliver it as a webhook."""
+        session = {
+            "id": f"cs_credits_{len(self.credit_checkout_sessions)}",
+            "object": "checkout.session",
+            "mode": "payment",
+            "url": "https://checkout.stripe.test/credits",
+            "customer": customer_id,
+            "client_reference_id": user_id,
+            "price_id": price_id,
+            "metadata": dict(metadata),
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "idempotency_key": idempotency_key,
+            "payment_status": "unpaid",
+        }
+        self.credit_checkout_sessions.append(session)
         return session
 
     async def set_cancel_at_period_end(self, subscription_id, value=True):
@@ -196,6 +227,26 @@ class FakeStripe:
         }
         self.subscriptions[customer_id] = sub
         return sub
+
+
+def credit_pack_session(
+    session: dict,
+    *,
+    payment_status: str = "paid",
+    amount_total: int = 500,
+    payment_intent: str | None = "pi_credits_1",
+) -> dict:
+    """A credit checkout session as the webhook delivers it once the customer
+    has been through Checkout: the session the fake created, now with a payment
+    status, an amount and (when paid) a PaymentIntent."""
+    return {
+        **session,
+        "status": "complete",
+        "payment_status": payment_status,
+        "amount_total": amount_total,
+        "currency": "usd",
+        "payment_intent": payment_intent,
+    }
 
 
 def webhook_event(event_id: str, event_type: str, obj: dict) -> str:

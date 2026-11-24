@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     checkout_success_url: str = "http://localhost:3000/billing/success"
     checkout_cancel_url: str = "http://localhost:3000/billing"
     portal_return_url: str = "http://localhost:3000/billing"
+    # Where a credit pack checkout returns. Stripe fills in {CHECKOUT_SESSION_ID},
+    # which is how the success page knows which purchase to wait for.
+    credits_success_url: str = (
+        "http://localhost:3000/billing/credits/success?session_id={CHECKOUT_SESSION_ID}"
+    )
+    credits_cancel_url: str = "http://localhost:3000/billing"
 
     # --- abuse control ---
     # POST /v1/billing/contact-sales is the only unauthenticated write, and
