@@ -22,6 +22,7 @@ class QuotaExceeded(Exception):
         reset_at: datetime,
         current_tier: str,
         upgrade_tier: str | None,
+        credits_remaining: int | None = None,
     ) -> None:
         self.key = key
         self.limit = limit
@@ -29,6 +30,11 @@ class QuotaExceeded(Exception):
         self.reset_at = reset_at
         self.current_tier = current_tier
         self.upgrade_tier = upgrade_tier
+        # The user's credit balance when credits could have paid for this
+        # quota and did not cover it. None when credits cannot pay for this
+        # quota at all, or when the balance could not be read (the spend
+        # failed closed): "we don't know" must not read as "you have none".
+        self.credits_remaining = credits_remaining
         super().__init__(f"quota '{key}' exceeded: {used}/{limit}")
 
     def to_payload(self) -> dict:
@@ -41,6 +47,7 @@ class QuotaExceeded(Exception):
             "reset_at": self.reset_at.isoformat(),
             "current_tier": self.current_tier,
             "upgrade_tier": self.upgrade_tier,
+            "credits_remaining": self.credits_remaining,
         }
 
 

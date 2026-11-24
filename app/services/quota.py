@@ -9,6 +9,12 @@ When Redis is unreachable, enforcement fails open: the request is allowed,
 customer refused by our outage is worse than a few uncounted requests -- the
 same trade the read path and the contact-sales rate limiter make.
 
+Past the cap, prepaid credits may pay instead of a 429 (docs/adr/0001). Only
+then is Postgres asked, and only for quotas `credit_cost` names. Spending fails
+*closed*: a lock timeout or database error refuses the request, because a
+credit is money and a spend we cannot record must not be given away. When Redis
+is down no credit is spent -- nothing says the request was over the cap.
+
 The window is the subtle part. A "daily" cap resets at UTC midnight for
 everyone; a "billing period" cap resets on the subscriber's own renewal date,
 which is a different day for almost every customer. Getting those two confused
@@ -29,8 +35,9 @@ from app import timeutil
 from app.cache import get_cache
 from app.errors import QuotaExceeded
 from app.models import UsageCounter
-from app.observability import quota_errors, quota_rejections
-from app.plans import CATALOG, TIER_RANK, QuotaWindow, Tier
+from app.observability import credit_spends, quota_errors, quota_rejections
+from app.plans import CATALOG, TIER_RANK, QuotaWindow, Tier, credit_cost
+from app.services import credits
 from app.services.entitlements import Entitlements
 from app.timeutil import as_utc
 
@@ -153,6 +160,33 @@ async def consume(
         return {"key": key, "limit": limit, "used": 0, "remaining": limit}
 
     if limit is not None and used > limit:
+        cost = credit_cost(key)
+        credits_left: int | None = None
+        if cost:
+            try:
+                credits_left = await _pay_with_credits(
+                    session.bind, user_id=user_id, key=key, cost=cost
+                )
+            except credits.CreditsExhausted as exhausted:
+                credit_spends.labels(quota=key, outcome="exhausted").inc()
+                credits_left = exhausted.balance
+            except Exception:
+                # Fail closed. No identifiers: the failure is the database's.
+                credit_spends.labels(quota=key, outcome="failed").inc()
+                log.exception("credit spend for %s failed; refusing the request", key)
+            else:
+                credit_spends.labels(quota=key, outcome="spent").inc()
+                await _mirror(session.bind, user_id=user_id, key=key, start=start, end=end)
+                return {
+                    "key": key,
+                    "limit": limit,
+                    "used": used,
+                    "remaining": 0,
+                    "reset_at": end,
+                    "credits_spent": cost,
+                    "credits_remaining": credits_left,
+                }
+
         current = entitlements.tier
         quota_rejections.labels(quota=key, tier=current.value).inc()
         raise QuotaExceeded(
@@ -162,6 +196,7 @@ async def consume(
             reset_at=end,
             current_tier=current.value,
             upgrade_tier=(t.value if (t := upgrade_tier_for(key, current)) else None),
+            credits_remaining=credits_left,
         )
 
     await _mirror(session.bind, user_id=user_id, key=key, start=start, end=end)
@@ -172,6 +207,21 @@ async def consume(
         "remaining": None if limit is None else max(0, limit - used),
         "reset_at": end,
     }
+
+
+async def _pay_with_credits(engine: AsyncEngine, *, user_id: str, key: str, cost: int) -> int:
+    """Spend `cost` credits for one request past the cap; return the balance left.
+
+    In a transaction of its own, like the mirror and for the same reason: the
+    spend is a fact once the request is let through, whatever the caller's
+    work does next, and no refund follows a later failure. Raises
+    `CreditsExhausted` when the user cannot pay, and anything else when the
+    spend could not be made -- both are refusals.
+    """
+    async with AsyncSession(engine, expire_on_commit=False) as own:
+        left = await credits.spend(own, user_id=user_id, credits=cost, reference=f"quota:{key}")
+        await own.commit()
+    return left
 
 
 async def _mirror(

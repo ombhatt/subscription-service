@@ -107,6 +107,17 @@ quota_errors = Counter(
 # being enforced. Alert on a sustained non-zero rate: the cache is unreachable
 # and every metered endpoint is uncapped until it is back.
 
+credit_spends = Counter(
+    "credit_spends_total",
+    "Requests past a daily cap that tried to pay with credits, by outcome.",
+    ["quota", "outcome"],  # spent | exhausted | failed
+    registry=REGISTRY,
+)
+
+# Spending fails *closed*, unlike the quota check: `failed` is a request the
+# user had credits for and was refused anyway, because the spend hit a lock
+# timeout or a database error. Alert on a sustained non-zero rate.
+
 sync_rejections = Counter(
     "sync_rejections_total",
     "Syncs refused because every sync slot in the process stayed busy. "

@@ -1,9 +1,10 @@
 """The row lock that serialises concurrent syncs for one customer.
 
 The unit suite runs on SQLite, which silently omits `FOR UPDATE`, so the lock
-test here takes real locks on the Postgres named by TEST_POSTGRES_URL. It is
-marked `postgres` and skips without that URL; CI runs it in the `migrations on
-postgres` job with `pytest -m postgres`. Locally, against a throwaway server:
+test here takes real locks on the Postgres named by TEST_POSTGRES_URL (the
+`postgres` fixture in tests/conftest.py). It is marked `postgres` and skips
+without that URL; CI runs it in the `migrations on postgres` job with
+`pytest -m postgres`. Locally, against a throwaway server:
 
     docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
     export TEST_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@localhost:55432/postgres
@@ -13,46 +14,18 @@ postgres` job with `pytest -m postgres`. Locally, against a throwaway server:
 from __future__ import annotations
 
 import asyncio
-import os
 import time
-from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import get_settings
 from app.db import engine_kwargs
-from app.models import Base, Subscription
+from app.models import Subscription
 from app.services import subscriptions
 from app.services.entitlements import commit_and_invalidate
-
-POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL", "")
-LOCK_NOT_AVAILABLE = "55P03"
-
-
-@pytest_asyncio.fixture
-async def postgres(request):
-    """Sessions on real Postgres, in a schema of their own that is dropped after."""
-    if not POSTGRES_URL:
-        if "postgres" in request.config.option.markexpr:
-            pytest.fail("-m postgres selected, but TEST_POSTGRES_URL is not set")
-        pytest.skip("needs TEST_POSTGRES_URL")
-    base = create_async_engine(POSTGRES_URL, poolclass=NullPool, **engine_kwargs(POSTGRES_URL))
-    schema = f"lock_test_{uuid4().hex[:12]}"
-    async with base.begin() as conn:
-        await conn.exec_driver_sql(f'create schema "{schema}"')
-    engine = base.execution_options(schema_translate_map={None: schema})
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
-    finally:
-        async with base.begin() as conn:
-            await conn.exec_driver_sql(f'drop schema "{schema}" cascade')
-        await base.dispose()
+from tests.conftest import LOCK_NOT_AVAILABLE
 
 
 @pytest.mark.postgres
