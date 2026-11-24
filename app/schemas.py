@@ -65,6 +65,18 @@ class QuotaState(Response):
     reset_at: datetime
 
 
+class CreditBalance(Response):
+    """Prepaid credits the user can spend past a daily cap.
+
+    Read from Postgres on every request, never cached: see app/services/credits.py.
+    """
+
+    balance: int = Field(description="credits in batches that have not expired")
+    next_expiry_at: datetime | None = Field(
+        description="when the soonest-expiring batch with credits left lapses; null if none"
+    )
+
+
 class EntitlementResponse(Response):
     """The only shape the product should ever branch on."""
 
@@ -80,6 +92,7 @@ class EntitlementResponse(Response):
     grace_ends_at: datetime | None = Field(
         default=None, description="set while past_due; access ends here"
     )
+    credits: CreditBalance
 
 
 class CheckoutRequest(BaseModel):
@@ -178,6 +191,25 @@ class GrantResponse(Response):
     expires_at: datetime | None
     created_by: str
     created_at: datetime
+
+
+class CreditGrantRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64)
+    # The ceiling is a typo guard, not a policy: the largest pack is a few
+    # thousand credits, and an extra zero or three should be a 422, not a grant.
+    credits: int = Field(gt=0, le=1_000_000)
+    # Required and non-blank: support has to be able to say why a batch exists.
+    reason: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+
+
+class CreditGrantResponse(Response):
+    batch_id: str
+    user_id: str
+    credits: int
+    reason: str
+    expires_at: datetime
+    created_by: str
+    balance: CreditBalance
 
 
 class AuditEntry(Response):

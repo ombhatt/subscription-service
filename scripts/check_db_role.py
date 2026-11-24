@@ -33,6 +33,8 @@ APP_TABLES = (
     "entitlement_grants",
     "subscription_audit",
     "sales_inquiries",
+    "credit_batches",
+    "credit_ledger",
 )
 
 # Schemas this service has no business touching. Reaching them means a leaked

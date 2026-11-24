@@ -6,7 +6,9 @@ from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -229,6 +231,104 @@ class SubscriptionAudit(Base):
     reason: Mapped[str] = mapped_column(String(128), nullable=False)
     stripe_event_id: Mapped[str | None] = mapped_column(String(64))
     detail: Mapped[dict | None] = mapped_column(JSONType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CreditSource(StrEnum):
+    """Where a credit batch came from."""
+
+    PURCHASE = "purchase"
+    ADMIN = "admin"
+
+
+class CreditLedgerKind(StrEnum):
+    """Why credits moved. The sign of the amount follows from the kind:
+    `purchase` and `admin` add, everything else takes away."""
+
+    PURCHASE = "purchase"
+    SPEND = "spend"
+    REFUND = "refund"
+    DISPUTE = "dispute"
+    ADMIN = "admin"
+    EXPIRE = "expire"
+
+
+class CreditBatch(Base):
+    """One grant or purchase of credits, spendable until `expires_at`.
+
+    `remaining` is the spendable balance of this batch; a user's balance is the
+    sum of `remaining` over batches that have not expired. Expiry is decided at
+    read time, never by a job, so a batch past `expires_at` is simply not
+    counted -- there is nothing to fall behind.
+
+    `user_id` has no foreign key, like `subscriptions`: the account lives in
+    Supabase, and these rows must survive its deletion for the books.
+
+    The purchase columns (`pack_id`, the Stripe ids, `amount_paid`) stay empty
+    on admin batches. `stripe_checkout_session_id` is unique so a replayed grant
+    webhook cannot create a second batch for one payment.
+    """
+
+    __tablename__ = "credit_batches"
+    __table_args__ = (
+        CheckConstraint("credits_granted > 0", name="ck_credit_batches_granted_positive"),
+        CheckConstraint(
+            "remaining >= 0 AND remaining <= credits_granted",
+            name="ck_credit_batches_remaining_in_range",
+        ),
+        CheckConstraint("source IN ('purchase', 'admin')", name="ck_credit_batches_source"),
+        Index("ix_credit_batches_user_expires", "user_id", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    pack_id: Mapped[str | None] = mapped_column(String(32))
+    credits_granted: Mapped[int] = mapped_column(Integer, nullable=False)
+    remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    # In the currency's smallest unit, as Stripe reports it. USD only.
+    amount_paid: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CreditLedgerEntry(Base):
+    """Append-only. Every movement of credits, signed, and what caused it.
+
+    Finance's record: it survives account deletion, and the running service may
+    only insert into it (migration 0008 grants app_service SELECT and INSERT,
+    nothing else). `reference` names the cause -- a Stripe event id, or
+    `admin:<actor>` for an operator grant.
+    """
+
+    __tablename__ = "credit_ledger"
+    __table_args__ = (
+        CheckConstraint("amount <> 0", name="ck_credit_ledger_amount_nonzero"),
+        CheckConstraint(
+            "kind IN ('purchase', 'spend', 'refund', 'dispute', 'admin', 'expire')",
+            name="ck_credit_ledger_kind",
+        ),
+        Index("ix_credit_ledger_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    batch_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("credit_batches.id"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

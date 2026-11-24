@@ -18,8 +18,17 @@ from app.auth import require_admin
 from app.db import get_session
 from app.models import EntitlementGrant, SalesInquiry, Subscription, SubscriptionAudit
 from app.plans import Tier
-from app.schemas import AuditEntry, GrantRequest, GrantResponse, SalesInquirySummary
+from app.schemas import (
+    AuditEntry,
+    CreditBalance,
+    CreditGrantRequest,
+    CreditGrantResponse,
+    GrantRequest,
+    GrantResponse,
+    SalesInquirySummary,
+)
 from app.services import audit as audit_service
+from app.services import credits as credit_service
 from app.services.entitlements import commit_and_invalidate, mark_entitlements_stale
 from app.services.subscriptions import sync_subscription_from_stripe
 from app.services.view import entitlement_view
@@ -54,6 +63,8 @@ async def inspect_user(user_id: str, session: AsyncSession = Depends(get_session
         .order_by(EntitlementGrant.created_at.desc())
     )
 
+    credit_batches = await credit_service.batches(session, user_id)
+
     return {
         "entitlements": view,
         "subscription": {
@@ -78,6 +89,22 @@ async def inspect_user(user_id: str, session: AsyncSession = Depends(get_session
                 "created_at": g.created_at,
             }
             for g in grant_rows.scalars().all()
+        ],
+        # Expired and spent-out batches too: support has to explain where a
+        # balance went, not only what is left.
+        "credit_batches": [
+            {
+                "id": b.id,
+                "source": b.source,
+                "pack_id": b.pack_id,
+                "credits_granted": b.credits_granted,
+                "remaining": b.remaining,
+                "expires_at": b.expires_at,
+                "reason": b.reason,
+                "stripe_payment_intent_id": b.stripe_payment_intent_id,
+                "created_at": b.created_at,
+            }
+            for b in credit_batches
         ],
         "audit": [
             AuditEntry(
@@ -197,6 +224,41 @@ async def revoke_grant(grant_id: str, session: AsyncSession = Depends(get_sessio
         mark_entitlements_stale(session, grant.user_id)
         await commit_and_invalidate(session)
     return {"status": "revoked", "grant_id": grant_id}
+
+
+@router.post("/credits", response_model=CreditGrantResponse)
+async def grant_credits(
+    body: CreditGrantRequest,
+    session: AsyncSession = Depends(get_session),
+    x_admin_actor: str = Header(default="unknown", alias="X-Admin-Actor"),
+) -> CreditGrantResponse:
+    """Give a user prepaid credits: goodwill, a won dispute, an outage make-good.
+
+    One batch with the standard expiry and one `admin` ledger entry naming the
+    actor. Any tier may hold credits; whether they can be *spent* is the
+    quota path's question, not this one's.
+    """
+    batch = await credit_service.grant_admin_credits(
+        session,
+        user_id=body.user_id,
+        credits=body.credits,
+        reason=body.reason,
+        actor=x_admin_actor,
+    )
+    # A plain commit is right here, and would be wrong for /grants: the
+    # balance is not a cached entitlement, so there is nothing to invalidate.
+    # Cache it, and this must mark and use commit_and_invalidate.
+    await session.commit()
+    held = await credit_service.balance(session, body.user_id)
+    return CreditGrantResponse(
+        batch_id=batch.id,
+        user_id=batch.user_id,
+        credits=batch.credits_granted,
+        reason=body.reason,
+        expires_at=batch.expires_at,
+        created_by=x_admin_actor,
+        balance=CreditBalance(balance=held.credits, next_expiry_at=held.next_expiry_at),
+    )
 
 
 @router.get("/sales-inquiries", response_model=list[SalesInquirySummary])

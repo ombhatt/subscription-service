@@ -249,6 +249,30 @@ export default function BillingPage() {
             ))}
           </div>
 
+          {/* Only when there is something to spend: an empty "0 credits" card
+              would advertise a feature nobody has bought into yet. Credits
+              outlive the plan, so this shows on any tier. */}
+          {ents.credits.balance > 0 && (
+            <section className="card" aria-labelledby="credits-heading">
+              <h2 id="credits-heading">Credits</h2>
+              <div className="rows">
+                <div className="row-item">
+                  <span className="k">Balance</span>
+                  <span className="v">
+                    {ents.credits.balance.toLocaleString()}{" "}
+                    {ents.credits.balance === 1 ? "credit" : "credits"}
+                  </span>
+                </div>
+                {ents.credits.next_expiry_at && (
+                  <div className="row-item">
+                    <span className="k">Next expiry</span>
+                    <span className="v">{formatDate(ents.credits.next_expiry_at)}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           <div className="card">
             <h2>What this plan includes</h2>
             <div className="rows">

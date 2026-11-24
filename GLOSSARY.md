@@ -109,3 +109,46 @@ not money still moving.
 
 "Cannot tell" is not "deleted". On SQLite, or Postgres without Supabase's auth
 schema, the check answers None, and reconcile behaves as it did before.
+
+## Credit
+
+A prepaid unit of usage **past a daily cap**: one credit pays for one message
+once the day's included allowance is gone. Bought in packs (Plus/Pro) or granted
+by an operator, always paid for -- or given -- *before* it is used. That is the
+whole difference from overage, which this service still does not do
+([ADR 0001](docs/adr/0001-prepaid-credits.md)).
+
+A credit is not an entitlement. The tier decides what a user may do; credits
+only extend how much of it they may do today, and they outlive the plan -- a
+user who downgrades keeps spending what they already hold. The balance is read
+from Postgres on every request and is not in the entitlement cache.
+
+## Credit batch
+
+`credit_batches` -- **one grant or purchase**, with what is left of it
+(`remaining`) and when it lapses (`expires_at`, 12 months after the grant).
+
+A user's **balance** is the sum of `remaining` over batches that have not
+expired. Expiry is decided at read time (`expires_at > now`), never by a job, so
+a lapsed batch simply stops counting at that instant; an `expire` ledger entry
+may be written later for the books, but nothing depends on it. The **soonest
+expiry** shown to the user skips spent-out batches: an empty batch expiring
+tomorrow is not news.
+
+`source` is `purchase` or `admin`. Admin batches come from
+`POST /v1/admin/credits`; purchase batches will have exactly one writer, and
+`stripe_checkout_session_id` is unique so a replayed webhook cannot pay out
+twice. `user_id` has no foreign key, like `subscriptions`: the account lives in
+Supabase and these rows must outlive it.
+
+## Credit ledger
+
+`credit_ledger` -- **append-only**, every movement of credits: the batch, a
+signed `amount`, its `kind` (`purchase`, `spend`, `refund`, `dispute`, `admin`,
+`expire`) and a `reference` to its cause (a Stripe event id, or
+`admin:<actor>`).
+
+Finance's record, not the balance: the balance is read from batches, and the
+ledger says how each batch got to where it is. The running service may only
+SELECT and INSERT here (migration 0008), so a bug or a leaked credential cannot
+rewrite history. Rows survive account deletion.

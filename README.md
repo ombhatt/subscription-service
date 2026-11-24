@@ -154,9 +154,14 @@ GET /v1/entitlements
   ],
   "current_period_end": "2026-10-04T09:14:00+00:00",
   "cancel_at_period_end": false,
-  "grace_ends_at": null
+  "grace_ends_at": null,
+  "credits": { "balance": 2500, "next_expiry_at": "2027-09-04T10:00:00+00:00" }
 }
 ```
+
+`credits` is the prepaid balance and when its soonest-expiring batch lapses
+(see [Prepaid credits](#prepaid-credits)). Unlike the tier it is read from
+Postgres on every call, not from the entitlement cache.
 
 Server-side, a metered endpoint does two things (see
 [`app/routers/chat_demo.py`](app/routers/chat_demo.py)):
@@ -294,6 +299,31 @@ ending it early is a refund conversation. Refunds are manual from the
 Stripe dashboard; automating them before you understand your own fraud patterns
 is premature.
 
+### Prepaid credits
+
+Usage past a daily cap can be **prepaid**, never billed afterwards
+([ADR 0001](docs/adr/0001-prepaid-credits.md)). A credit is one message past the
+cap; credits come in batches that expire 12 months after they are granted, and
+every movement is recorded in an append-only ledger. Expiry is read-time -- no
+job. Terms are defined in [GLOSSARY.md](GLOSSARY.md#credit).
+
+Built so far: the ledger, the balance on the billing page and
+`GET /v1/entitlements`, and operator grants (`POST /v1/admin/credits`).
+Spending credits and buying packs are tracked in
+[#136](https://github.com/ombhatt/subscription-service/issues/136) and
+[#137](https://github.com/ombhatt/subscription-service/issues/137); until they
+land, a balance is shown but not spent.
+
+```
+curl -X POST localhost:8000/v1/admin/credits \
+  -H "X-Admin-Key: $ADMIN_API_KEY" -H "X-Admin-Actor: sam" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "<supabase user id>", "credits": 500, "reason": "outage make-good"}'
+```
+
+`credits` must be positive and `reason` non-blank; the batch gets the standard
+expiry and an `admin` ledger entry referencing the actor.
+
 ### Sharing a Stripe account
 
 A Stripe account can serve more than one application, and this one's used to:
@@ -386,6 +416,7 @@ app/
     subscriptions.py   the write path; sync_subscription_from_stripe
     entitlements.py    the read path; resolve + cache + fail open
     quota.py           windows, atomic counters, enforcement
+    credits.py         prepaid credit batches, the ledger, the balance read
     view.py            assembles the API payload
     audit.py           append-only transitions
   routers/
@@ -421,6 +452,8 @@ scripts/
 | `entitlement_grants` | comps and staff accounts; resolution takes the higher of grant and subscription |
 | `sales_inquiries` | Enterprise leads from the contact-sales form, worked through the admin API |
 | `subscription_audit` | append-only transitions with the causing event id |
+| `credit_batches` | one row per grant or purchase of prepaid credits: what is left and when it expires. Outlives the account |
+| `credit_ledger` | append-only credit movements with their cause; the service may only insert. Outlives the account |
 
 ## Tests
 
@@ -565,11 +598,12 @@ before the customer does. When it happens to one customer,
 Support endpoints, all behind `X-Admin-Key`:
 
 ```
-GET    /v1/admin/users/{user_id}              entitlements + Stripe ids + full audit
+GET    /v1/admin/users/{user_id}              entitlements + Stripe ids + audit + credit batches
 POST   /v1/admin/users/{user_id}/resync       force a re-read from Stripe
 POST   /v1/admin/users/{user_id}/extend-grace push back a dunning cut-off
 POST   /v1/admin/grants                       comp a user to a tier
 DELETE /v1/admin/grants/{id}                  revoke
+POST   /v1/admin/credits                      grant prepaid credits {user_id, credits, reason}
 GET    /v1/webhooks/recent                    webhook health at a glance
 ```
 
@@ -745,7 +779,7 @@ carries `mismatched` as a field.
 
 ## What is deliberately not here
 
-Team seats, usage-based overage, per-customer limits for Enterprise,
+Team seats, postpaid or metered overage, per-customer limits for Enterprise,
 multi-currency, self-serve refunds, in-house invoice PDFs, coupon management
 screens, and general rate limiting -- only the contact-sales form is throttled
 in-app; the rest belongs at the edge.
@@ -753,3 +787,9 @@ in-app; the rest belongs at the edge.
 Seats are the one deferred item that changes the schema — a subscription stops
 belonging to a user — so if teams are on the roadmap, say so before this grows
 call sites.
+
+Usage past a cap is still never billed after the fact. What exists instead is
+**prepaid credits** -- paid for (or granted) before they are used, so the quota
+gate stays the only enforcement point and there is nothing to collect. The line
+between the two is [ADR 0001](docs/adr/0001-prepaid-credits.md); auto-recharge
+would cross it and needs its own decision.

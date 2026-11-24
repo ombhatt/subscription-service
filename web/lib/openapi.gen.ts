@@ -80,6 +80,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Credits
+         * @description Give a user prepaid credits: goodwill, a won dispute, an outage make-good.
+         *
+         *     One batch with the standard expiry and one `admin` ledger entry naming the
+         *     actor. Any tier may hold credits; whether they can be *spent* is the
+         *     quota path's question, not this one's.
+         */
+        post: operations["grant_credits_v1_admin_credits_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/grants": {
         parameters: {
             query?: never;
@@ -604,6 +628,52 @@ export interface components {
             status: "received";
         };
         /**
+         * CreditBalance
+         * @description Prepaid credits the user can spend past a daily cap.
+         *
+         *     Read from Postgres on every request, never cached: see app/services/credits.py.
+         */
+        CreditBalance: {
+            /**
+             * Balance
+             * @description credits in batches that have not expired
+             */
+            balance: number;
+            /**
+             * Next Expiry At
+             * @description when the soonest-expiring batch with credits left lapses; null if none
+             */
+            next_expiry_at: string | null;
+        };
+        /** CreditGrantRequest */
+        CreditGrantRequest: {
+            /** Credits */
+            credits: number;
+            /** Reason */
+            reason: string;
+            /** User Id */
+            user_id: string;
+        };
+        /** CreditGrantResponse */
+        CreditGrantResponse: {
+            balance: components["schemas"]["CreditBalance"];
+            /** Batch Id */
+            batch_id: string;
+            /** Created By */
+            created_by: string;
+            /** Credits */
+            credits: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Reason */
+            reason: string;
+            /** User Id */
+            user_id: string;
+        };
+        /**
          * Discount
          * @description A discount mirrored from Stripe; see stripe_client._discount.
          */
@@ -640,6 +710,7 @@ export interface components {
              * @default false
              */
             cancel_at_period_end: boolean;
+            credits: components["schemas"]["CreditBalance"];
             /** Current Period End */
             current_period_end: string | null;
             /** Display Name */
@@ -980,6 +1051,42 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    grant_credits_v1_admin_credits_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string;
+                "x-admin-key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

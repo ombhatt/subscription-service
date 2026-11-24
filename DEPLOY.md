@@ -295,7 +295,9 @@ One consequence to keep in mind: RLS is on with no default policies (migration
 `0004`), and `app_service` gets through by an explicit per-table policy from
 `0005`. A table added later without one will be invisible to the service.
 `tests/test_schema_exposure.py` fails in that case, which is where you want to
-find out.
+find out. Tables added after `0005` are locked down and granted by the migration
+that creates them, listed in its `LOCKED_TABLES` and `APP_ROLE_GRANTS` (see
+`0008`, which also keeps `credit_ledger` insert-only for the service).
 
 `ENVIRONMENT=production` is load-bearing, not a label: it disables `/docs`,
 `/redoc` and `/openapi.json` — which publish the entire admin surface without
