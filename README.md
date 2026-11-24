@@ -588,7 +588,8 @@ Postgres is unreachable but **200 `"degraded"` when only Redis is** — the read
 path falls back to the database, and Redis is shared, so failing readiness on it
 would empty the load balancer and turn a cache outage into a total one. While
 Redis is down, quota caps are not enforced: metered requests are allowed,
-counted in `quota_errors_total`, and still recorded in `usage_counters`.
+counted in `quota_errors_total`, and still recorded in `usage_counters` — and
+no prepaid credit is spent, since nothing says a request is over the cap.
 
 Reconciliation exists because you *will* miss webhooks — an outage, a bad
 deploy, a 500 inside a retry window. The only question is whether you find out
@@ -698,6 +699,7 @@ three this file has always told you to alert on:
 | `entitlement_cache_total{result}` | hit / miss / **stale** — a rising stale rate is an outage in progress |
 | `quota_rejections_total{quota,tier}` | how often the paywall actually fires |
 | `quota_errors_total{quota}` | quota checks that could not reach Redis and let the request through — **alert on it**: non-zero means caps are not being enforced |
+| `credit_spends_total{quota,outcome}` | requests past the cap that tried to pay with credits: spent / exhausted / **failed** — `failed` fails closed, refusing a user who had credits, so **alert on a sustained rate** |
 | `sync_rejections_total` | syncs refused because every sync slot in the process stayed busy — Stripe is slow; each refused webhook is redelivered, so a sustained rate is a backlog (watch `webhook_lag_seconds`), not lost events |
 
 Two limits worth knowing. Metrics are per-process and in memory, so under

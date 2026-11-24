@@ -226,7 +226,10 @@ The limiter fails open: if Redis is unreachable the request is allowed and
 non-zero rate means the public endpoint is no longer protected. Quota
 enforcement makes the same trade and has its own counter,
 `quota_errors_total`: non-zero means metered endpoints are uncapped until Redis
-is back.
+is back. Spending prepaid credits fails the other way, *closed*:
+`credit_spends_total{outcome="failed"}` counts users refused although they had
+credits, because the spend hit `CREDIT_LOCK_TIMEOUT_SECONDS` (default 1) or a
+database error. Alert on that too.
 
 Optional, but the reason flags exist:
 

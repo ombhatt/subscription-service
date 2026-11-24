@@ -12,6 +12,10 @@ Expiry is read-time: a batch counts while `expires_at > now`. No job enforces
 it, so none can fall behind. An `expire` ledger entry may be written later for
 the books; nothing here depends on one.
 
+Spending (`spend`) locks the user's spendable batches with a plain
+`FOR UPDATE` under a short `lock_timeout`. Not `SKIP LOCKED`: with one batch,
+a concurrent spender would skip the only row and see no credits at all.
+
 Nothing in this module commits. Callers own the transaction.
 """
 
@@ -21,13 +25,22 @@ import calendar
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import timeutil
+from app.config import get_settings
 from app.models import CreditBatch, CreditLedgerEntry, CreditLedgerKind, CreditSource
 from app.plans import CREDIT_VALIDITY_MONTHS
 from app.timeutil import as_utc
+
+
+class CreditsExhausted(Exception):
+    """Not enough unexpired credits to pay. Carries what the user does hold."""
+
+    def __init__(self, balance: int) -> None:
+        self.balance = balance
+        super().__init__(f"not enough credits: {balance} left")
 
 
 @dataclass(frozen=True)
@@ -114,3 +127,74 @@ async def batches(session: AsyncSession, user_id: str) -> list[CreditBatch]:
         .order_by(CreditBatch.created_at.desc(), CreditBatch.id)
     )
     return list(result.scalars().all())
+
+
+async def spend(session: AsyncSession, *, user_id: str, credits: int, reference: str) -> int:
+    """Take `credits` from the user's oldest unexpired batches; return what is left.
+
+    Raises `CreditsExhausted` and changes nothing if the user holds fewer.
+    Writes one `spend` ledger row per batch it takes from. Flushes; does not
+    commit -- the caller's commit is what makes the spend real.
+
+    Every spendable batch of the user is locked, not just the oldest, because
+    one spend may take from several: a cost above one, or an oldest batch with
+    less left than the cost. Taking them in one sorted statement locks them in
+    the same order for every spender, so concurrent spends cannot deadlock, and
+    costs nothing extra -- concurrent spenders queue on the oldest batch anyway.
+    A request that waited on a batch another one emptied does not see it:
+    Postgres re-checks `remaining > 0` on the newly locked row and drops it.
+
+    A lock wait past `credit_lock_timeout_seconds` raises the driver's
+    lock-not-available error, which the caller turns into a refusal.
+    """
+    if credits <= 0:
+        raise ValueError("a spend must take credits")
+    await _bound_lock_wait(session)
+    result = await session.execute(
+        select(CreditBatch)
+        .where(
+            CreditBatch.user_id == user_id,
+            CreditBatch.remaining > 0,
+            CreditBatch.expires_at > timeutil.utcnow(),
+        )
+        # Oldest grant or purchase first.
+        .order_by(CreditBatch.created_at, CreditBatch.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    held = list(result.scalars().all())
+    total = sum(batch.remaining for batch in held)
+    if total < credits:
+        raise CreditsExhausted(total)
+
+    owed = credits
+    for batch in held:
+        take = min(owed, batch.remaining)
+        batch.remaining -= take
+        session.add(
+            CreditLedgerEntry(
+                user_id=user_id,
+                batch_id=batch.id,
+                kind=CreditLedgerKind.SPEND.value,
+                amount=-take,
+                reference=reference,
+            )
+        )
+        owed -= take
+        if owed == 0:
+            break
+    await session.flush()
+    return total - credits
+
+
+async def _bound_lock_wait(session: AsyncSession) -> None:
+    """Limit how long the next statements wait for a row lock, for this
+    transaction only. `set_config(..., true)` is transaction-local."""
+    bind = session.get_bind()
+    if getattr(bind, "dialect", None) is None or bind.dialect.name != "postgresql":
+        return  # SQLite has no row locks to wait for
+    milliseconds = int(get_settings().credit_lock_timeout_seconds * 1000)
+    await session.execute(
+        text("select set_config('lock_timeout', :value, true)"),
+        {"value": str(milliseconds)},
+    )

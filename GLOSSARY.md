@@ -141,6 +141,24 @@ tomorrow is not news.
 twice. `user_id` has no foreign key, like `subscriptions`: the account lives in
 Supabase and these rows must outlive it.
 
+## Credit spend
+
+What a request past its daily cap does instead of a 429, when its quota has a
+**credit cost** (`CREDIT_COST` in `app/plans.py`; only `messages_per_day`, at
+1, in v1). Only after Redis has counted the request over the cap -- under the
+cap, Postgres is never asked. It takes the cost from the oldest unexpired
+batches with `remaining > 0`, locked with a plain `FOR UPDATE` under
+`CREDIT_LOCK_TIMEOUT_SECONDS`, and writes a `spend` ledger row per batch, all
+in a transaction of its own. Not refunded if the request later fails, like the
+counter itself.
+
+It **fails closed**: a lock timeout or database error refuses the request
+(429, `credits_remaining: null`), because a credit we cannot record must not be
+given away. That is the opposite of the quota check, which fails *open* -- and
+while Redis is down nothing says a request is over the cap, so no credit is
+spent at all. Any tier spends, Free after a downgrade included; Enterprise never
+reaches it, having no caps.
+
 ## Credit ledger
 
 `credit_ledger` -- **append-only**, every movement of credits: the batch, a

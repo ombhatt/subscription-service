@@ -119,6 +119,9 @@ export interface QuotaExceeded {
   reset_at: string;
   current_tier: Tier;
   upgrade_tier: Tier | null;
+  /** Credit balance when credits could have paid for this quota and fell
+   * short. null when they cannot pay for it, or the balance is unknown. */
+  credits_remaining: number | null;
 }
 
 /** 403 body when a feature is not on this tier. */
