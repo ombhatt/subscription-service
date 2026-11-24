@@ -1,7 +1,7 @@
 """Prepaid credits: the admin grant, the ledger, and the balance read.
 
-Credits are not spent yet; these are about getting them in, recording them,
-and showing them -- including which ones no longer count.
+These are about getting credits in, recording them, and showing them --
+including which ones no longer count. Spending them is tests/test_credit_spend.py.
 """
 
 from __future__ import annotations

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # fast returns 500 and Stripe retries, which is far better than workers
     # piling up on a lock that a degraded Stripe is holding.
     db_lock_timeout_seconds: float = 5.0
+    # How long a request past its daily cap waits for its credit batch while a
+    # concurrent request from the same user spends from it. Short, because the
+    # holder only runs an UPDATE and an INSERT, and the waiter is a user
+    # waiting on a reply: giving up refuses the request with a 429 (spending
+    # fails closed) rather than holding a worker and a connection.
+    credit_lock_timeout_seconds: float = 1.0
     # How many syncs one process runs at once. Each holds a database connection
     # across its Stripe calls, so when Stripe is slow it is syncs that fill the
     # pool -- and entitlement reads, on every API request, queue behind them.

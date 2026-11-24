@@ -204,6 +204,20 @@ def price_id_for(tier: Tier, interval: BillingInterval) -> str | None:
 # prepaid credits (docs/adr/0001-prepaid-credits.md)
 # --------------------------------------------------------------------------
 
+# What one unit of usage past the cap costs in credits, by quota key. A quota
+# that is not here cannot be paid for with credits: past its cap it is a 429,
+# as it always was. Uploads stay hard-capped in v1; letting credits pay for
+# them later is one line here and no schema change.
+CREDIT_COST: dict[str, int] = {
+    "messages_per_day": 1,
+}
+
+
+def credit_cost(key: str) -> int | None:
+    """Credits one over-cap unit of `key` costs. None if credits cannot pay."""
+    return CREDIT_COST.get(key)
+
+
 # How long a credit batch stays spendable, counted from the grant. Applies to
 # every batch, bought or granted: expiry is read-time (`expires_at > now`), so
 # changing this moves only batches granted afterwards.
@@ -211,7 +225,7 @@ CREDIT_VALIDITY_MONTHS = 12
 
 
 # --------------------------------------------------------------------------
-# credit packs (#137)
+# credit packs
 # --------------------------------------------------------------------------
 
 

@@ -391,6 +391,7 @@ async function mockApi(page: Page, api: FakeApi) {
           reset_at: "2026-09-04T00:00:00Z",
           current_tier: tier,
           upgrade_tier: tier === "free" ? "plus" : tier === "plus" ? "pro" : null,
+          credits_remaining: 0,
         } satisfies QuotaExceeded,
       });
       return;

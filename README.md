@@ -308,10 +308,11 @@ every movement is recorded in an append-only ledger. Expiry is read-time -- no
 job. Terms are defined in [GLOSSARY.md](GLOSSARY.md#credit).
 
 Built so far: the ledger, the balance on the billing page and
-`GET /v1/entitlements`, operator grants (`POST /v1/admin/credits`), and buying
-**credit packs**. Spending credits is tracked in
-[#136](https://github.com/ombhatt/subscription-service/issues/136); until it
-lands, a balance is shown but not spent.
+`GET /v1/entitlements`, operator grants (`POST /v1/admin/credits`), buying
+**credit packs**, and **spending**: a request past its daily cap, on a quota
+with a credit cost (`CREDIT_COST` in `app/plans.py`), takes credits from the
+oldest unexpired batch instead of getting a 429, and fails closed if the spend
+cannot be recorded ([GLOSSARY.md](GLOSSARY.md#credit-spend)).
 
 **Buying a pack.** `CREDIT_PACKS` in `app/plans.py` defines the packs (small
 500, medium 2,500, large 7,500 credits); `scripts/seed_stripe.py` holds their
@@ -613,7 +614,8 @@ Postgres is unreachable but **200 `"degraded"` when only Redis is** — the read
 path falls back to the database, and Redis is shared, so failing readiness on it
 would empty the load balancer and turn a cache outage into a total one. While
 Redis is down, quota caps are not enforced: metered requests are allowed,
-counted in `quota_errors_total`, and still recorded in `usage_counters`.
+counted in `quota_errors_total`, and still recorded in `usage_counters` — and
+no prepaid credit is spent, since nothing says a request is over the cap.
 
 Reconciliation exists because you *will* miss webhooks — an outage, a bad
 deploy, a 500 inside a retry window. The only question is whether you find out
@@ -723,6 +725,7 @@ three this file has always told you to alert on:
 | `entitlement_cache_total{result}` | hit / miss / **stale** — a rising stale rate is an outage in progress |
 | `quota_rejections_total{quota,tier}` | how often the paywall actually fires |
 | `quota_errors_total{quota}` | quota checks that could not reach Redis and let the request through — **alert on it**: non-zero means caps are not being enforced |
+| `credit_spends_total{quota,outcome}` | requests past the cap that tried to pay with credits: spent / exhausted / **failed** — `failed` fails closed, refusing a user who had credits, so **alert on a sustained rate** |
 | `sync_rejections_total` | syncs refused because every sync slot in the process stayed busy — Stripe is slow; each refused webhook is redelivered, so a sustained rate is a backlog (watch `webhook_lag_seconds`), not lost events |
 
 Two limits worth knowing. Metrics are per-process and in memory, so under

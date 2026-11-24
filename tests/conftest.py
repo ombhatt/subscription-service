@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import jwt
 import pytest
@@ -61,7 +62,7 @@ from app import auth, stripe_client, timeutil
 from app.auth import CurrentUser, get_current_user, get_current_user_optional
 from app.billing_provider import PROVIDER_FUNCTIONS
 from app.cache import InMemoryBackend, set_cache
-from app.db import get_session
+from app.db import engine_kwargs, get_session
 from app.main import app
 from app.models import Base
 from tests.fakes.stripe import FakeStripe
@@ -158,6 +159,38 @@ async def sessionmaker_(engine):
 async def session(sessionmaker_):
     async with sessionmaker_() as s:
         yield s
+
+
+POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL", "")
+# Postgres's lock_not_available: what a statement raises once `lock_timeout` runs out.
+LOCK_NOT_AVAILABLE = "55P03"
+
+
+@pytest_asyncio.fixture
+async def postgres(request):
+    """Sessions on real Postgres, in a schema of their own that is dropped after.
+
+    For tests marked `postgres`: SQLite silently omits `FOR UPDATE`, so row
+    locks can only be tested here. Skips without TEST_POSTGRES_URL; CI runs
+    these in the `migrations on postgres` job with `pytest -m postgres`.
+    """
+    if not POSTGRES_URL:
+        if "postgres" in request.config.option.markexpr:
+            pytest.fail("-m postgres selected, but TEST_POSTGRES_URL is not set")
+        pytest.skip("needs TEST_POSTGRES_URL")
+    base = create_async_engine(POSTGRES_URL, poolclass=NullPool, **engine_kwargs(POSTGRES_URL))
+    schema = f"lock_test_{uuid4().hex[:12]}"
+    async with base.begin() as conn:
+        await conn.exec_driver_sql(f'create schema "{schema}"')
+    engine = base.execution_options(schema_translate_map={None: schema})
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    finally:
+        async with base.begin() as conn:
+            await conn.exec_driver_sql(f'drop schema "{schema}" cascade')
+        await base.dispose()
 
 
 @pytest.fixture
