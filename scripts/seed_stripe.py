@@ -9,6 +9,9 @@ are looked up by `lookup_key`.
 Every price is stamped with `metadata.tier`, which is what lets a subscriber on
 a price you have since retired keep resolving to the right tier.
 
+Credit packs (one-time prices, one product) are created the same way, from
+CREDIT_PACKS in plans.py and CREDIT_PACK_AMOUNTS here.
+
     python -m scripts.seed_stripe            # create/verify, print env lines
     python -m scripts.seed_stripe --dry-run  # show what would be created
 """
@@ -22,7 +25,15 @@ from pathlib import Path
 import stripe
 
 from app.config import get_settings
-from app.plans import CATALOG, PURCHASABLE_TIERS, BillingInterval, Tier, price_env_name
+from app.plans import (
+    CATALOG,
+    CREDIT_PACKS,
+    PURCHASABLE_TIERS,
+    BillingInterval,
+    Tier,
+    credit_pack_env_name,
+    price_env_name,
+)
 
 # Amounts live here rather than in plans.py because Stripe owns pricing once
 # these exist; edit, re-run, and the new price becomes the one new customers
@@ -33,6 +44,16 @@ AMOUNTS: dict[tuple[Tier, BillingInterval], int] = {
     (Tier.PRO, BillingInterval.MONTHLY): 10000,  # $100.00
     (Tier.PRO, BillingInterval.ANNUAL): 100000,  # $1000.00
 }
+
+# One-time prices for the packs in plans.CREDIT_PACKS, the same for Plus and
+# Pro. Deliberately 3-4.5x a fully used subscription's per-message cost, so a
+# heavy regular user is better off on Pro (PRD #134).
+CREDIT_PACK_AMOUNTS: dict[str, int] = {
+    "small": 500,  # $5.00 for 500 credits
+    "medium": 2000,  # $20.00 for 2,500 credits
+    "large": 5000,  # $50.00 for 7,500 credits
+}
+CREDIT_PACK_PRODUCT_ID = "credit_pack"
 
 CURRENCY = "usd"
 INTERVALS = {BillingInterval.MONTHLY: "month", BillingInterval.ANNUAL: "year"}
@@ -90,6 +111,54 @@ def ensure_price(tier: Tier, interval: BillingInterval, product_id: str, dry_run
     return price["id"]
 
 
+def ensure_credit_product(dry_run: bool) -> str:
+    try:
+        stripe.Product.retrieve(CREDIT_PACK_PRODUCT_ID)
+        print(f"  product {CREDIT_PACK_PRODUCT_ID}: exists")
+        return CREDIT_PACK_PRODUCT_ID
+    except stripe.InvalidRequestError:
+        pass
+    if dry_run:
+        print(f"  product {CREDIT_PACK_PRODUCT_ID}: would create")
+        return CREDIT_PACK_PRODUCT_ID
+    stripe.Product.create(
+        id=CREDIT_PACK_PRODUCT_ID,
+        name="Credit pack",
+        metadata={"kind": "credit_pack"},
+    )
+    print(f"  product {CREDIT_PACK_PRODUCT_ID}: created")
+    return CREDIT_PACK_PRODUCT_ID
+
+
+def credit_lookup_key(pack_id: str) -> str:
+    return f"credits_{pack_id}"
+
+
+def ensure_credit_price(pack_id: str, product_id: str, dry_run: bool) -> str:
+    lookup_key = credit_lookup_key(pack_id)
+    existing = stripe.Price.list(lookup_keys=[lookup_key], active=True, limit=1)
+    if existing["data"]:
+        price = existing["data"][0]
+        print(f"  price {lookup_key}: exists ({price['id']})")
+        return price["id"]
+
+    if dry_run:
+        print(f"  price {lookup_key}: would create")
+        return "price_would_be_created"
+
+    pack = CREDIT_PACKS[pack_id]
+    price = stripe.Price.create(
+        product=product_id,
+        currency=CURRENCY,
+        unit_amount=CREDIT_PACK_AMOUNTS[pack_id],
+        lookup_key=lookup_key,
+        nickname=f"{pack.credits:,} credits",
+        metadata={"kind": "credit_pack", "pack_id": pack_id, "credits": str(pack.credits)},
+    )
+    print(f"  price {lookup_key}: created ({price['id']})")
+    return price["id"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
@@ -131,6 +200,13 @@ def main() -> int:
     if unpriced:
         print(f"No amount in AMOUNTS for: {', '.join(unpriced)}. Add them and re-run.")
         return 1
+    unpriced_packs = [pack_id for pack_id in CREDIT_PACKS if pack_id not in CREDIT_PACK_AMOUNTS]
+    if unpriced_packs:
+        print(
+            f"No amount in CREDIT_PACK_AMOUNTS for: {', '.join(unpriced_packs)}. "
+            "Add them and re-run."
+        )
+        return 1
 
     env_lines: list[str] = []
     for tier in PURCHASABLE_TIERS:
@@ -139,6 +215,12 @@ def main() -> int:
         for interval in BillingInterval:
             price_id = ensure_price(tier, interval, product_id, args.dry_run)
             env_lines.append(f"{price_env_name(tier, interval)}={price_id}")
+
+    print("credit packs:")
+    credit_product = ensure_credit_product(args.dry_run)
+    for pack_id in CREDIT_PACKS:
+        price_id = ensure_credit_price(pack_id, credit_product, args.dry_run)
+        env_lines.append(f"{credit_pack_env_name(pack_id)}={price_id}")
 
     print("\nAdd these to .env:\n")
     print("\n".join(env_lines))

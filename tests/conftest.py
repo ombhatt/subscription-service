@@ -32,6 +32,9 @@ os.environ.update(
         "STRIPE_PRICE_PLUS_ANNUAL": "price_plus_y",
         "STRIPE_PRICE_PRO_MONTHLY": "price_pro_m",
         "STRIPE_PRICE_PRO_ANNUAL": "price_pro_y",
+        "STRIPE_PRICE_CREDITS_SMALL": "price_credits_small",
+        "STRIPE_PRICE_CREDITS_MEDIUM": "price_credits_medium",
+        "STRIPE_PRICE_CREDITS_LARGE": "price_credits_large",
         "DUNNING_GRACE_DAYS": "7",
         # Out of the way of every test that is not about rate limiting;
         # tests/test_rate_limit.py sets its own windows.

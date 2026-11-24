@@ -334,6 +334,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/billing/credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Credit Packs
+         * @description The packs, and whether this user may buy one. The billing page shows
+         *     buy buttons only when `can_buy`.
+         */
+        get: operations["credit_packs_v1_billing_credits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/credits/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Credit Checkout
+         * @description Start a hosted, one-time checkout for a credit pack. Grants nothing --
+         *     the webhook does, once the payment has cleared. 409 unless the user has an
+         *     active or trialing Plus or Pro subscription.
+         */
+        post: operations["credit_checkout_v1_billing_credits_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/billing/credits/checkout/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Credit Purchase
+         * @description Has this checkout's grant landed? Another user's checkout reads as not
+         *     granted, the same as one that does not exist.
+         */
+        get: operations["credit_purchase_v1_billing_credits_checkout__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/billing/health": {
         parameters: {
             query?: never;
@@ -645,6 +709,14 @@ export interface components {
              */
             next_expiry_at: string | null;
         };
+        /** CreditCheckoutRequest */
+        CreditCheckoutRequest: {
+            /**
+             * Pack Id
+             * @description a key of CREDIT_PACKS: small, medium or large
+             */
+            pack_id: string;
+        };
         /** CreditGrantRequest */
         CreditGrantRequest: {
             /** Credits */
@@ -672,6 +744,50 @@ export interface components {
             reason: string;
             /** User Id */
             user_id: string;
+        };
+        /** CreditPackOffer */
+        CreditPackOffer: {
+            /** Credits */
+            credits: number;
+            /** Currency */
+            currency: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Unit Amount
+             * @description in the currency's smallest unit; null if Stripe was unreachable
+             */
+            unit_amount: number | null;
+        };
+        /**
+         * CreditPacksResponse
+         * @description What the billing page needs to offer packs: which ones, at what price,
+         *     and whether this user may buy them.
+         */
+        CreditPacksResponse: {
+            /** Can Buy */
+            can_buy: boolean;
+            /** Packs */
+            packs: components["schemas"]["CreditPackOffer"][];
+            /**
+             * Reason
+             * @description why not, when can_buy is false
+             */
+            reason: string | null;
+        };
+        /**
+         * CreditPurchaseResponse
+         * @description The credits success page polls this until `granted`.
+         */
+        CreditPurchaseResponse: {
+            balance: components["schemas"]["CreditBalance"];
+            /**
+             * Credits
+             * @description credits the purchase added, once granted
+             */
+            credits: number | null;
+            /** Granted */
+            granted: boolean;
         };
         /**
          * Discount
@@ -1424,6 +1540,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContactSalesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    credit_packs_v1_billing_credits_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditPacksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    credit_checkout_v1_billing_credits_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreditCheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    credit_purchase_v1_billing_credits_checkout__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreditPurchaseResponse"];
                 };
             };
             /** @description Validation Error */

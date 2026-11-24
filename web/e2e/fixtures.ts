@@ -3,6 +3,9 @@ import { test as base, type Page } from "@playwright/test";
 import type {
   ChatReply,
   CheckoutPayload,
+  CreditCheckoutPayload,
+  CreditPacks,
+  CreditPurchase,
   Discount,
   Entitlements,
   FeatureNotEntitled,
@@ -95,6 +98,8 @@ export interface FakeState {
   credits: Entitlements["credits"];
   /** Bumps the tier to this after N entitlement reads, to imitate a webhook landing. */
   grantAfterReads?: { reads: number; tier: Tier };
+  /** Grants a bought pack on the Nth poll of its purchase, like the webhook landing. */
+  creditGrantAfterPolls?: { polls: number; credits: number };
 }
 
 export const PLUS_SUBSCRIBER = {
@@ -114,6 +119,9 @@ class FakeApi {
   portalBodies: PortalPayload[] = [];
   cancelCalls = 0;
   resumeCalls = 0;
+  /** What each credit pack checkout asked for. */
+  creditCheckoutBodies: CreditCheckoutPayload[] = [];
+  creditPurchasePolls = 0;
 
   constructor(overrides: Partial<FakeState> = {}) {
     this.state = {
@@ -173,6 +181,45 @@ class FakeApi {
       cancel_at_period_end: this.state.cancelAtPeriodEnd,
       grace_ends_at: this.state.graceEndsAt,
       credits: this.state.credits,
+    };
+  }
+
+  /** Mirrors app/services/credit_purchases.py: an active or trialing Plus or
+   * Pro subscription, and nothing that outranks it. */
+  creditPacks(): CreditPacks {
+    const { tier, status, source } = this.state;
+    const canBuy =
+      source === "subscription" &&
+      (tier === "plus" || tier === "pro") &&
+      (status === "active" || status === "trialing");
+    return {
+      can_buy: canBuy,
+      reason: canBuy ? null : "Credit packs are available with an active Plus or Pro subscription.",
+      packs: [
+        { id: "small", credits: 500, unit_amount: 500, currency: "usd" },
+        { id: "medium", credits: 2500, unit_amount: 2000, currency: "usd" },
+        { id: "large", credits: 7500, unit_amount: 5000, currency: "usd" },
+      ],
+    };
+  }
+
+  creditPurchase(): CreditPurchase {
+    this.creditPurchasePolls += 1;
+    const pending = this.state.creditGrantAfterPolls;
+    if (pending && this.creditPurchasePolls >= pending.polls) {
+      this.state.credits = {
+        balance: this.state.credits.balance + pending.credits,
+        next_expiry_at: this.state.credits.next_expiry_at ?? "2027-11-03T12:00:00Z",
+      };
+      this.state.creditGrantAfterPolls = undefined;
+      return { granted: true, credits: pending.credits, balance: this.state.credits };
+    }
+    if (pending) return { granted: false, credits: null, balance: this.state.credits };
+    // Granted earlier: still granted on a later read.
+    return {
+      granted: this.state.credits.balance > 0,
+      credits: this.state.credits.balance > 0 ? this.state.credits.balance : null,
+      balance: this.state.credits,
     };
   }
 
@@ -269,6 +316,25 @@ async function mockApi(page: Page, api: FakeApi) {
     await route.fulfill({
       json: { checkout_url: "http://localhost:3000/billing/success", session_id: "cs_test_fake" },
     });
+  });
+
+  await page.route("**/api/v1/billing/credits", async (route) => {
+    await route.fulfill({ json: api.creditPacks() });
+  });
+
+  await page.route("**/api/v1/billing/credits/checkout", async (route) => {
+    api.creditCheckoutBodies.push(route.request().postDataJSON());
+    // Lands on the credits success page, as Stripe's redirect would.
+    await route.fulfill({
+      json: {
+        checkout_url: "http://localhost:3000/billing/credits/success?session_id=cs_credits_fake",
+        session_id: "cs_credits_fake",
+      },
+    });
+  });
+
+  await page.route("**/api/v1/billing/credits/checkout/*", async (route) => {
+    await route.fulfill({ json: api.creditPurchase() });
   });
 
   await page.route("**/api/v1/billing/cancel", async (route) => {

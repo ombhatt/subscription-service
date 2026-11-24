@@ -4,6 +4,9 @@ import type {
   CheckoutPayload,
   Interval,
   ContactSalesPayload,
+  CreditCheckoutPayload,
+  CreditPacks,
+  CreditPurchase,
   Entitlements,
   Plan,
   PortalPayload,
@@ -123,6 +126,26 @@ export function startCheckout(tier: Tier, interval: Interval) {
     method: "POST",
     body: JSON.stringify({ tier, interval } satisfies CheckoutPayload),
   });
+}
+
+/** The credit packs, their prices, and whether this user may buy one. */
+export function getCreditPacks() {
+  return request<CreditPacks>("/v1/billing/credits");
+}
+
+/** A one-time Checkout for a pack. 409 unless on an active Plus or Pro plan. */
+export function startCreditCheckout(packId: string) {
+  return request<{ checkout_url: string; session_id: string }>("/v1/billing/credits/checkout", {
+    method: "POST",
+    body: JSON.stringify({ pack_id: packId } satisfies CreditCheckoutPayload),
+  });
+}
+
+/** Whether a pack checkout's grant has landed yet; the success page polls it. */
+export function getCreditPurchase(sessionId: string) {
+  return request<CreditPurchase>(
+    `/v1/billing/credits/checkout/${encodeURIComponent(sessionId)}`,
+  );
 }
 
 export function getSubscription() {

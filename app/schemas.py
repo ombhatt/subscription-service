@@ -108,6 +108,36 @@ class CheckoutResponse(Response):
     session_id: str
 
 
+class CreditCheckoutRequest(BaseModel):
+    pack_id: str = Field(description="a key of CREDIT_PACKS: small, medium or large")
+
+
+class CreditPackOffer(Response):
+    id: str
+    credits: int
+    unit_amount: int | None = Field(
+        description="in the currency's smallest unit; null if Stripe was unreachable"
+    )
+    currency: str | None
+
+
+class CreditPacksResponse(Response):
+    """What the billing page needs to offer packs: which ones, at what price,
+    and whether this user may buy them."""
+
+    can_buy: bool
+    reason: str | None = Field(description="why not, when can_buy is false")
+    packs: list[CreditPackOffer]
+
+
+class CreditPurchaseResponse(Response):
+    """The credits success page polls this until `granted`."""
+
+    granted: bool
+    credits: int | None = Field(description="credits the purchase added, once granted")
+    balance: CreditBalance
+
+
 class PortalRequest(BaseModel):
     """Optional: which plan the customer asked for.
 

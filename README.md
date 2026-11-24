@@ -308,11 +308,34 @@ every movement is recorded in an append-only ledger. Expiry is read-time -- no
 job. Terms are defined in [GLOSSARY.md](GLOSSARY.md#credit).
 
 Built so far: the ledger, the balance on the billing page and
-`GET /v1/entitlements`, and operator grants (`POST /v1/admin/credits`).
-Spending credits and buying packs are tracked in
-[#136](https://github.com/ombhatt/subscription-service/issues/136) and
-[#137](https://github.com/ombhatt/subscription-service/issues/137); until they
-land, a balance is shown but not spent.
+`GET /v1/entitlements`, operator grants (`POST /v1/admin/credits`), and buying
+**credit packs**. Spending credits is tracked in
+[#136](https://github.com/ombhatt/subscription-service/issues/136); until it
+lands, a balance is shown but not spent.
+
+**Buying a pack.** `CREDIT_PACKS` in `app/plans.py` defines the packs (small
+500, medium 2,500, large 7,500 credits); `scripts/seed_stripe.py` holds their
+amounts ($5, $20, $50, the same on Plus and Pro) and creates the one-time
+Prices, whose ids go in `STRIPE_PRICE_CREDITS_{SMALL,MEDIUM,LARGE}`. A pack whose
+variable is unset is not offered. Only an **active or trialing Plus or Pro
+subscription** may buy; everyone else -- Free, past due, a complimentary
+grant, Enterprise -- gets a 409, and the billing page shows them no buy
+buttons.
+
+```
+GET  /v1/billing/credits                       packs, prices, and can_buy for this user
+POST /v1/billing/credits/checkout {pack_id}    hosted one-time Checkout; grants nothing
+GET  /v1/billing/credits/checkout/{session_id} has that purchase landed? (the success page polls it)
+```
+
+As with subscriptions, the webhook grants, never the redirect. A paid
+`checkout.session.completed`, or `checkout.session.async_payment_succeeded` for
+a delayed method like a bank debit, carrying `metadata.kind = credit_pack`
+goes to `grant_credits_from_checkout`, the only writer of purchase batches. It
+is idempotent by the checkout session id, so a replayed event, or
+`async_payment_succeeded` after a paid `completed`, cannot grant twice. The
+subscription re-sync that follows `completed` is unchanged and changes nothing.
+Receipts are Stripe's "successful payments" email, not the app's.
 
 ```
 curl -X POST localhost:8000/v1/admin/credits \
@@ -373,6 +396,7 @@ A Next.js + TypeScript frontend lives in [`web/`](web) and is what
 | `/login` | sign in or sign up |
 | `/billing` | live entitlements, **what you pay**, quota meters, dunning and cancellation banners, any discount, cancel (two-step), resume, portal link |
 | `/billing/success` | where Stripe returns; **polls** until the webhook grants, and says so if it never does |
+| `/billing/credits/success` | where a credit pack checkout returns; **polls** for that purchase's grant, then shows the new balance |
 | `/chat` | a metered endpoint rendering both paywalls: 403 locked model, 429 out of quota |
 
 `next.config.mjs` rewrites `/api/*` to the FastAPI service, so the browser makes
@@ -417,11 +441,12 @@ app/
     entitlements.py    the read path; resolve + cache + fail open
     quota.py           windows, atomic counters, enforcement
     credits.py         prepaid credit batches, the ledger, the balance read
+    credit_purchases.py  who may buy packs, pack checkout, grant_credits_from_checkout
     view.py            assembles the API payload
     audit.py           append-only transitions
   routers/
-    billing.py         checkout, portal, cancel, plans, subscription
-    webhooks.py        Stripe -> sync, plus an admin-only ops view
+    billing.py         checkout, portal, cancel, plans, subscription, credit packs
+    webhooks.py        Stripe -> sync or credit grant, plus an admin-only ops view
     entitlements.py    GET /v1/entitlements
     admin.py           support tooling
     chat_demo.py       example metered endpoint — delete once yours does this

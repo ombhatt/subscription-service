@@ -271,6 +271,20 @@
         "title": "CreditBalance",
         "type": "object"
       },
+      "CreditCheckoutRequest": {
+        "properties": {
+          "pack_id": {
+            "description": "a key of CREDIT_PACKS: small, medium or large",
+            "title": "Pack Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pack_id"
+        ],
+        "title": "CreditCheckoutRequest",
+        "type": "object"
+      },
       "CreditGrantRequest": {
         "properties": {
           "credits": {
@@ -342,6 +356,115 @@
           "balance"
         ],
         "title": "CreditGrantResponse",
+        "type": "object"
+      },
+      "CreditPackOffer": {
+        "properties": {
+          "credits": {
+            "title": "Credits",
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "unit_amount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "in the currency's smallest unit; null if Stripe was unreachable",
+            "title": "Unit Amount"
+          }
+        },
+        "required": [
+          "id",
+          "credits",
+          "unit_amount",
+          "currency"
+        ],
+        "title": "CreditPackOffer",
+        "type": "object"
+      },
+      "CreditPacksResponse": {
+        "description": "What the billing page needs to offer packs: which ones, at what price,\nand whether this user may buy them.",
+        "properties": {
+          "can_buy": {
+            "title": "Can Buy",
+            "type": "boolean"
+          },
+          "packs": {
+            "items": {
+              "$ref": "#/components/schemas/CreditPackOffer"
+            },
+            "title": "Packs",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "why not, when can_buy is false",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "can_buy",
+          "reason",
+          "packs"
+        ],
+        "title": "CreditPacksResponse",
+        "type": "object"
+      },
+      "CreditPurchaseResponse": {
+        "description": "The credits success page polls this until `granted`.",
+        "properties": {
+          "balance": {
+            "$ref": "#/components/schemas/CreditBalance"
+          },
+          "credits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "credits the purchase added, once granted",
+            "title": "Credits"
+          },
+          "granted": {
+            "title": "Granted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "granted",
+          "credits",
+          "balance"
+        ],
+        "title": "CreditPurchaseResponse",
         "type": "object"
       },
       "Discount": {
@@ -2033,6 +2156,175 @@
           }
         },
         "summary": "Contact Sales",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/credits": {
+      "get": {
+        "description": "The packs, and whether this user may buy one. The billing page shows\nbuy buttons only when `can_buy`.",
+        "operationId": "credit_packs_v1_billing_credits_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditPacksResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Credit Packs",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/credits/checkout": {
+      "post": {
+        "description": "Start a hosted, one-time checkout for a credit pack. Grants nothing --\nthe webhook does, once the payment has cleared. 409 unless the user has an\nactive or trialing Plus or Pro subscription.",
+        "operationId": "credit_checkout_v1_billing_credits_checkout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditCheckoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Credit Checkout",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/billing/credits/checkout/{session_id}": {
+      "get": {
+        "description": "Has this checkout's grant landed? Another user's checkout reads as not\ngranted, the same as one that does not exist.",
+        "operationId": "credit_purchase_v1_billing_credits_checkout__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditPurchaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Credit Purchase",
         "tags": [
           "billing"
         ]
