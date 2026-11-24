@@ -6,11 +6,15 @@ Kept apart from `entitlements` (which resolves and caches the *tier*) and
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas import CreditBalance, EntitlementResponse, QuotaState
 from app.services import credits, quota
 from app.services.entitlements import resolve_entitlements
+
+log = logging.getLogger(__name__)
 
 
 async def entitlement_view(session: AsyncSession, user_id: str) -> EntitlementResponse:
@@ -18,7 +22,20 @@ async def entitlement_view(session: AsyncSession, user_id: str) -> EntitlementRe
     usage = await quota.states(user_id, resolved)
     # From Postgres, every time: the balance is not part of the cached
     # entitlements, so a grant or a spend shows on the next read.
-    held = await credits.balance(session, user_id)
+    #
+    # And the only read here that needs Postgres when the entitlements are
+    # cached, so it must not take the payload down with it: the read path
+    # fails open to the last known entitlements while the database is
+    # unreachable. The balance is then unknown -- null, never 0, which would
+    # read as "you have none". Spending is unaffected: it fails closed.
+    balance: CreditBalance | None
+    try:
+        held = await credits.balance(session, user_id)
+    except Exception:
+        log.exception("credit balance read failed; serving entitlements without it")
+        balance = None
+    else:
+        balance = CreditBalance(balance=held.credits, next_expiry_at=held.next_expiry_at)
     return EntitlementResponse(
         user_id=resolved.user_id,
         tier=resolved.tier,
@@ -30,5 +47,5 @@ async def entitlement_view(session: AsyncSession, user_id: str) -> EntitlementRe
         current_period_end=resolved.current_period_end,
         cancel_at_period_end=resolved.cancel_at_period_end,
         grace_ends_at=resolved.grace_ends_at,
-        credits=CreditBalance(balance=held.credits, next_expiry_at=held.next_expiry_at),
+        credits=balance,
     )

@@ -471,7 +471,15 @@
             "type": "boolean"
           },
           "credits": {
-            "$ref": "#/components/schemas/CreditBalance"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditBalance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null when the balance could not be read (the database is unreachable)"
           },
           "current_period_end": {
             "anyOf": [

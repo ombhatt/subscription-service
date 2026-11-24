@@ -92,7 +92,9 @@ class EntitlementResponse(Response):
     grace_ends_at: datetime | None = Field(
         default=None, description="set while past_due; access ends here"
     )
-    credits: CreditBalance
+    credits: CreditBalance | None = Field(
+        description="null when the balance could not be read (the database is unreachable)"
+    )
 
 
 class CheckoutRequest(BaseModel):
