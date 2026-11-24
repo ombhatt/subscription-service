@@ -251,8 +251,9 @@ export default function BillingPage() {
 
           {/* Only when there is something to spend: an empty "0 credits" card
               would advertise a feature nobody has bought into yet. Credits
-              outlive the plan, so this shows on any tier. */}
-          {ents.credits.balance > 0 && (
+              outlive the plan, so this shows on any tier. Null when the API
+              could not read the balance (database outage). */}
+          {ents.credits && ents.credits.balance > 0 && (
             <section className="card" aria-labelledby="credits-heading">
               <h2 id="credits-heading">Credits</h2>
               <div className="rows">

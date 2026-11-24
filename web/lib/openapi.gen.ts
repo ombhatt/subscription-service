@@ -710,7 +710,8 @@ export interface components {
              * @default false
              */
             cancel_at_period_end: boolean;
-            credits: components["schemas"]["CreditBalance"];
+            /** @description null when the balance could not be read (the database is unreachable) */
+            credits: components["schemas"]["CreditBalance"] | null;
             /** Current Period End */
             current_period_end: string | null;
             /** Display Name */
